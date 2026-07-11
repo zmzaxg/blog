@@ -1,85 +1,20 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-    <head>
-<meta charset="utf-8">
-
-	<meta charset="UTF-8">
-	<meta http-equiv="cache-control" content="max-age=0" />
-	<meta http-equiv="cache-control" content="no-cache" />
-	<meta http-equiv="expires" content="0" />
-	<meta http-equiv="expires" content="Tue, 01 Jan 1980 1:00:00 GMT" />
-	<meta http-equiv="pragma" content="no-cache" />
-
-	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-	<meta http-equiv="X-UA-Compatible" content="IE=8">
-	<meta http-equiv="Expires" content="0">
-	<meta http-equiv="Pragma" content="no-cache">
-	<meta http-equiv="Cache-control" content="no-cache">
-	<meta http-equiv="Cache" content="no-cache">
-	<!--让浏览器不缓存html静态-->
-
-<title>即将跳转到我的首页 - zmzaxg微博客</title>
-<meta http-equiv="refresh" content="10;url=http://me.zmzaxg.top" />
+<head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link href="https://img.icnal.com/css/app.min.css" rel="stylesheet" type="text/css">
-<link href="https://img.icnal.com/css/icons.min.css" rel="stylesheet" type="text/css">
-<style>
-.text-error {
-    color: #727cf5;
-    text-shadow: rgba(114,124,245,.3) 5px 1px, rgba(114,124,245,.2) 10px 3px;
-    font-size: 5.25rem;
-    line-height: 5.625rem;
-}
-.card-header, .card-title {
-    color: #fff;
-    font-size: 1.2rem;
-}
-</style>
+<title>可爱小博客</title>
+<link rel="stylesheet" href="css/style.css">
 </head>
-<body class="authentication-bg">
-<div class="account-pages mt-5 mb-5">
-<div class="container">
-<div class="row justify-content-center">
-<div class="col-lg-5">
-<div class="card">
-
-<div class="card-header pt-4 pb-4 text-center bg-primary">
-即将转跳到我的首页
-</div>
-<div class="card-body p-4">
-<div class="text-center">
-<h1><img src="https://img.icnal.com/images/error.jpg"
- alt="悲伤" width="125"></h1>
-<h4 class="text-uppercase text-danger mt-3">经考虑，我们将关闭blog站点，换用实用更佳的论坛系统，博客的数据都会迁移到论坛内相应位置，现在即将转跳到我的个人首页<br><span id="time">10</span>秒后自动跳转</h4>
-<p class="text-muted mt-3">如未自动转跳还请手动继续，或者手动跳过读秒</p>
-<a class="btn btn-info mt-3" href="http://me.zmzaxg.top">继续前往</a>
-</div>
-</div> 
-</div>
-
-</div> 
-</div>
-
-</div>
-
-</div>
-
-
-
-
-
-<script type="text/javascript"> 
-    var t = 10;//设定跳转的时间 
-    var interval = setInterval("refer()", 1000); //启动1秒定时 
-    function refer() {
-        if (t == 0){clearInterval(interval);//停止计时
-            window.location.href = "http://me.zmzaxg.top"; //跳转的地址
-        }
-        $('#time').text(t); // 显示倒计时 
-        t--; // 计数器递减 
-    } 
-</script>
-<script src="https://img.icnal.com/js/app.min.js"></script>
-
-
-</body></html>
+<body>
+<header class="site-header">
+  <h1>🍯 我的小博客</h1>
+  <p>日常记录 · 温柔卡片式阅读</p>
+</header>
+<main class="container">
+  <div id="post-list" class="card-grid"></div>
+</main>
+<script src="js/marked.min.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
