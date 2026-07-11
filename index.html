@@ -9,29 +9,24 @@
 <body>
 <header class="site-header">
   <h1>🍯 我的小博客</h1>
-  <p>纯静态Markdown博客 · GitHub自动拉取文章</p>
+  <p>纯静态Markdown博客 · EdgeOne自动构建</p>
 </header>
 
 <div class="page-wrap">
-  <!-- 侧边栏 -->
   <aside class="sidebar">
     <div class="sidebar-card content-card">
       <h3>🔍 文章搜索</h3>
       <input id="search-input" type="text" placeholder="输入标题/内容搜索...">
     </div>
-
     <div class="sidebar-card content-card">
       <h3>📌 最新文章</h3>
       <ul id="latest-list"></ul>
     </div>
-
     <div class="sidebar-card content-card">
       <h3>🏷 标签分类</h3>
       <div id="tag-wrap"></div>
     </div>
   </aside>
-
-  <!-- 文章主列表 -->
   <main class="main-content">
     <div id="post-list" class="card-grid"></div>
     <div id="empty-tip" class="empty-card content-card" style="display:none;">加载中...</div>
