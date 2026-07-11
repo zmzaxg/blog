@@ -9,11 +9,35 @@
 <body>
 <header class="site-header">
   <h1>🍯 我的小博客</h1>
-  <p>日常记录 · 温柔卡片式阅读</p>
+  <p>纯静态Markdown博客 · GitHub评论</p>
 </header>
-<main class="container">
-  <div id="post-list" class="card-grid"></div>
-</main>
+
+<div class="page-wrap">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-card content-card">
+      <h3>🔍 文章搜索</h3>
+      <input id="search-input" type="text" placeholder="输入标题/内容搜索...">
+    </div>
+
+    <div class="sidebar-card content-card">
+      <h3>📌 最新文章</h3>
+      <ul id="latest-list"></ul>
+    </div>
+
+    <div class="sidebar-card content-card">
+      <h3>🏷 标签分类</h3>
+      <div id="tag-wrap"></div>
+    </div>
+  </aside>
+
+  <!-- 文章主列表 -->
+  <main class="main-content">
+    <div id="post-list" class="card-grid"></div>
+    <div id="empty-tip" class="empty-card content-card" style="display:none;">暂无文章</div>
+  </main>
+</div>
+
 <script src="js/marked.min.js"></script>
 <script src="js/main.js"></script>
 </body>
