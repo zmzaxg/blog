@@ -1,12 +1,16 @@
 const params = new URLSearchParams(location.search);
-const fileName = params.get("file");
+const filePath = decodeURIComponent(params.get("path"));
 const contentBox = document.getElementById("md-content");
 
-async function loadArticle(){
-  if(!fileName) return;
-  const resp = await fetch(`posts/${fileName}`);
-  const mdText = await resp.text();
-  // 渲染Markdown正文
-  contentBox.innerHTML = marked.parse(mdText);
+async function loadArticle() {
+  if (!filePath) return;
+  try {
+    const resp = await fetch(`./${filePath}`);
+    const mdText = await resp.text();
+    contentBox.innerHTML = marked.parse(mdText);
+  } catch (e) {
+    contentBox.innerHTML = "<p>文章加载失败，文件不存在</p>";
+    console.error(e);
+  }
 }
 loadArticle();
