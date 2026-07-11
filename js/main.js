@@ -1,4 +1,9 @@
-// 存储全部文章数据
+// ========== 这里改成你自己的仓库信息 ==========
+const GH_USER = "zmzaxg";
+const GH_REPO = "xxdd";
+const GH_BRANCH = "main";
+// ==============================================
+
 let allPosts = [];
 const postListEl = document.getElementById("post-list");
 const emptyTip = document.getElementById("empty-tip");
@@ -6,70 +11,109 @@ const searchInput = document.getElementById("search-input");
 const latestList = document.getElementById("latest-list");
 const tagWrap = document.getElementById("tag-wrap");
 
-// 模拟读取posts文件夹内所有md文件（线上需配合静态目录遍历，本地使用预设清单）
-// 线上部署（Vercel/GitPages）：替换为真实文件遍历，本地开发直接在这里填你的md文件名
-const mdFileNames = ["hello.md","demo.md"];
+// 1. 获取posts目录下所有md文件列表（GitHub Tree API）
+async function getPostsFileList() {
+  const treeUrl = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`;
+  const res = await fetch(treeUrl);
+  if (!res.ok) throw new Error("获取仓库文件失败");
+  const data = await res.json();
+  // 过滤posts下后缀为.md的文件
+  const mdFiles = data.tree.filter(item => {
+    return item.path.startsWith("posts/") && item.path.endsWith(".md");
+  });
+  return mdFiles;
+}
 
-// 解析md内容：提取标题、日期、标签、正文预览
-async function parseMarkdownFile(filename){
-  const res = await fetch(`posts/${filename}`);
-  const raw = await res.text();
-  let title = "无标题";
+// 2. 单篇MD解析：元数据、标题、摘要、标签
+async function parsePostFile(fileItem) {
+  const filePath = fileItem.path;
+  const fileName = filePath.split("/").pop();
+  // 原始md内容地址
+  const rawUrl = `https://raw.githubusercontent.com/${GH_USER}/${GH_REPO}/${GH_BRANCH}/${filePath}`;
+  const rawRes = await fetch(rawUrl);
+  const raw = await rawRes.text();
+
+  let customTitle = null;
+  let mdTitle = "无标题";
   let date = "未知日期";
   let tags = [];
 
-  // 提取一级标题 # xxx
-  const titleMatch = raw.match(/^#\s+(.+)/m);
-  if(titleMatch) title = titleMatch[1];
-
-  // 提取元数据 --- date:xxx tags:a,b,c ---
-  const metaMatch = raw.match(/^---[\s\S]*?---/m);
-  if(metaMatch){
-    const metaText = metaMatch[0];
-    const dMatch = metaText.match(/date:\s*(\S+)/);
-    const tMatch = metaText.match(/tags:\s*(.+)/);
-    if(dMatch) date = dMatch[1];
-    if(tMatch) tags = tMatch[1].split(",").map(i=>i.trim());
+  // 解析头部 --- 元数据
+  const metaReg = /^---([\s\S]*?)---/m;
+  const metaMatch = raw.match(metaReg);
+  if (metaMatch) {
+    const meta = metaMatch[1];
+    const tMatch = meta.match(/title:\s*(.+)/);
+    if (tMatch) customTitle = tMatch[1].trim();
+    const dMatch = meta.match(/date:\s*(\S+)/);
+    if (dMatch) date = dMatch[1].trim();
+    const tagMatch = meta.match(/tags:\s*(.+)/);
+    if (tagMatch) tags = tagMatch[1].split(",").map(s => s.trim());
   }
 
-  // 纯文本截取前150字简介
-  let plain = raw
-    .replace(/^---[\s\S]*?---/m,"")
-    .replace(/#{1,6}\s/g,"")
-    .replace(/[*#>`\[\]()]/g,"")
-    .replace(/\n/g," ")
-    .replace(/\s+/g," ");
-  let desc = plain.slice(0,150);
-  if(plain.length>150) desc += "...";
+  // 提取一级标题 # xxx
+  const h1Match = raw.match(/^#\s+(.+)/m);
+  if (h1Match) mdTitle = h1Match[1].trim();
+  // 优先级：自定义title > 文件一级标题
+  const finalTitle = customTitle || mdTitle;
+
+  // 生成150字纯文本摘要
+  const plainText = raw
+    .replace(/^---[\s\S]*?---/m, "")
+    .replace(/#{1,6}\s/g, "")
+    .replace(/[*#>`\[\]()\-~]/g, "")
+    .replace(/\n/g, " ")
+    .replace(/\s+/g, " ");
+  let desc = plainText.slice(0, 150);
+  if (plainText.length > 150) desc += "...";
 
   return {
-    filename,title,date,tags,desc,rawText:raw
+    filename: fileName,
+    filePath: filePath,
+    title: finalTitle,
+    date: date,
+    tags: tags,
+    desc: desc,
+    fullText: raw
   };
 }
 
-// 加载全部文章
-async function loadAllPosts(){
-  allPosts = [];
-  for(let fn of mdFileNames){
-    const post = await parseMarkdownFile(fn);
-    allPosts.push(post);
+// 3. 加载全部文章
+async function loadAllPosts() {
+  try {
+    emptyTip.style.display = "block";
+    emptyTip.innerText = "正在从GitHub拉取文章...";
+    const fileList = await getPostsFileList();
+    if (fileList.length === 0) {
+      emptyTip.innerText = "posts文件夹暂无MD文章";
+      return;
+    }
+    // 批量解析所有md
+    const postPromises = fileList.map(item => parsePostFile(item));
+    allPosts = await Promise.all(postPromises);
+    // 按日期倒序
+    allPosts.sort((a, b) => new Date(b.date) - new Date(a.date));
+    // 渲染页面
+    renderPostList(allPosts);
+    renderLatestSidebar();
+    renderAllTags();
+    emptyTip.style.display = "none";
+  } catch (err) {
+    emptyTip.innerText = "文章加载失败：" + err.message;
+    console.error(err);
   }
-  // 按日期倒序
-  allPosts.sort((a,b)=>new Date(b.date)-new Date(a.date));
-  renderPostList(allPosts);
-  renderLatestSidebar();
-  renderAllTags();
 }
 
-// 渲染文章卡片列表
-function renderPostList(list){
+// 渲染文章卡片
+function renderPostList(list) {
   postListEl.innerHTML = "";
-  if(list.length===0){
-    emptyTip.style.display="block";
+  if (list.length === 0) {
+    emptyTip.style.display = "block";
+    emptyTip.innerText = "无匹配文章";
     return;
   }
-  emptyTip.style.display="none";
-  list.forEach(post=>{
+  emptyTip.style.display = "none";
+  list.forEach(post => {
     const card = document.createElement("div");
     card.className = "content-card post-card";
     card.innerHTML = `
@@ -81,50 +125,44 @@ function renderPostList(list){
   });
 }
 
-// 侧边栏最新文章
-function renderLatestSidebar(){
+// 侧边栏最新3篇
+function renderLatestSidebar() {
   latestList.innerHTML = "";
-  const top3 = allPosts.slice(0,3);
-  top3.forEach(p=>{
+  const top3 = allPosts.slice(0, 3);
+  top3.forEach(p => {
     const li = document.createElement("li");
     li.innerHTML = `<a href="article.html?file=${p.filename}">${p.title}</a>`;
     latestList.appendChild(li);
   })
 }
 
-// 侧边栏全部标签
-function renderAllTags(){
+// 标签渲染&筛选
+function renderAllTags() {
   tagWrap.innerHTML = "";
   const tagSet = new Set();
-  allPosts.forEach(p=>p.tags.forEach(t=>tagSet.add(t)));
-  const tags = Array.from(tagSet);
-  tags.forEach(tag=>{
+  allPosts.forEach(p => p.tags.forEach(t => tagSet.add(t)));
+  Array.from(tagSet).forEach(tag => {
     const span = document.createElement("span");
     span.className = "tag-item";
     span.textContent = tag;
-    span.onclick = ()=>filterByTag(tag);
+    span.onclick = () => filterByTag(tag);
     tagWrap.appendChild(span);
   })
 }
-
-// 标签筛选
-function filterByTag(tag){
-  const filter = allPosts.filter(p=>p.tags.includes(tag));
+function filterByTag(tag) {
+  const filter = allPosts.filter(p => p.tags.includes(tag));
   renderPostList(filter);
 }
 
-// 搜索功能
-searchInput.addEventListener("input",(e)=>{
+// 全局搜索
+searchInput.addEventListener("input", (e) => {
   const kw = e.target.value.toLowerCase().trim();
-  if(!kw){
-    renderPostList(allPosts);
-    return;
-  }
-  const result = allPosts.filter(p=>
-    p.title.toLowerCase().includes(kw) || p.rawText.toLowerCase().includes(kw)
+  if (!kw) return renderPostList(allPosts);
+  const result = allPosts.filter(p =>
+    p.title.toLowerCase().includes(kw) || p.fullText.toLowerCase().includes(kw)
   );
   renderPostList(result);
 })
 
-// 初始化
+// 初始化执行
 loadAllPosts();
