@@ -8,9 +8,7 @@
     "build": "bash scripts/build.sh",
     "typecheck": "tsc -p tsconfig.app.json",
     "lint": "concurrently npm:typecheck npm:lint:eslint",
-    "lint:eslint": "eslint src",
-    "precommit": "npm run lint",
-    "prepare": "node scripts/setup-git-hooks.mjs"
+    "lint:eslint": "eslint src"
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.9.0",
