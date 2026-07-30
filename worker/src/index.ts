@@ -47,6 +47,13 @@ import {
   saveToStorageHandler,
   uploadImageHandler,
   serveImageHandler,
+  browseWebDAVHandler,
+  createWebDAVDirHandler,
+  deleteWebDAVItemHandler,
+  readWebDAVFileHandler,
+  migrateToWebDAVHandler,
+  cleanupWebDAVHandler,
+  storageStatsHandler,
 } from './routes/storage';
 import {
   listNotificationsHandler,
@@ -258,6 +265,48 @@ async function handleApiRoutes(
   m = matchRoute(apiPath, '/storage/configs/:id/test');
   if (m.matched && method === 'POST') {
     return testStorageConnectionHandler(request, env, m.params.id);
+  }
+
+  // WebDAV 目录浏览
+  m = matchRoute(apiPath, '/storage/configs/:id/browse');
+  if (m.matched && method === 'GET') {
+    return browseWebDAVHandler(request, env, m.params.id);
+  }
+
+  // WebDAV 创建目录
+  m = matchRoute(apiPath, '/storage/configs/:id/mkdir');
+  if (m.matched && method === 'POST') {
+    return createWebDAVDirHandler(request, env, m.params.id);
+  }
+
+  // WebDAV 删除文件/目录
+  m = matchRoute(apiPath, '/storage/configs/:id/delete-item');
+  if (m.matched && method === 'POST') {
+    return deleteWebDAVItemHandler(request, env, m.params.id);
+  }
+
+  // WebDAV 读取文件
+  m = matchRoute(apiPath, '/storage/configs/:id/read-file');
+  if (m.matched && method === 'GET') {
+    return readWebDAVFileHandler(request, env, m.params.id);
+  }
+
+  // 存储统计
+  m = matchRoute(apiPath, '/storage/configs/:id/stats');
+  if (m.matched && method === 'GET') {
+    return storageStatsHandler(request, env, m.params.id);
+  }
+
+  // 数据迁移 D1 → WebDAV
+  m = matchRoute(apiPath, '/storage/migrate');
+  if (m.matched && method === 'POST') {
+    return migrateToWebDAVHandler(request, env);
+  }
+
+  // 数据清理
+  m = matchRoute(apiPath, '/storage/cleanup');
+  if (m.matched && method === 'POST') {
+    return cleanupWebDAVHandler(request, env);
   }
 
   m = matchRoute(apiPath, '/storage/files');

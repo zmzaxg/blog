@@ -20,23 +20,77 @@ interface StorageConfig {
   updated_at: string;
 }
 
+interface WebDAVConfig {
+  url: string;
+  username: string;
+  password: string;
+  path?: string; // 子目录路径
+  stores?: string[]; // 存储的数据类型: posts, comments, users, images
+}
+
 // WebDAV 基础操作
 async function webdavRequest(
   url: string,
   method: string,
-  config: { url: string; username: string; password: string },
+  config: WebDAVConfig,
   body?: BodyInit,
   contentType = 'text/markdown'
 ): Promise<Response> {
   const authHeader = `Basic ${btoa(`${config.username}:${config.password}`)}`;
+  const headers: Record<string, string> = {
+    Authorization: authHeader,
+  };
+  if (method === 'PUT' || method === 'POST' || method === 'MKCOL') {
+    headers['Content-Type'] = contentType;
+  }
+  // PROPFIND 需要 Depth 头
+  if (method === 'PROPFIND') {
+    headers['Depth'] = '1';
+  }
   return fetch(url, {
     method,
-    headers: {
-      Authorization: authHeader,
-      'Content-Type': contentType,
-    },
+    headers,
     body,
   });
+}
+
+// 构建完整的 WebDAV URL（含子目录）
+function buildWebDAVUrl(config: WebDAVConfig, subPath = ''): string {
+  let baseUrl = config.url.replace(/\/$/, '');
+  if (config.path) {
+    const dirPath = config.path.replace(/^\/|\/$/g, '');
+    if (dirPath) {
+      baseUrl += '/' + dirPath;
+    }
+  }
+  if (subPath) {
+    baseUrl += '/' + subPath.replace(/^\//, '');
+  }
+  return baseUrl;
+}
+
+// 确保 WebDAV 目录存在
+async function ensureWebDAVDir(config: WebDAVConfig, dirPath: string): Promise<boolean> {
+  const url = buildWebDAVUrl(config, dirPath);
+  try {
+    // 先检查目录是否存在
+    const checkResp = await webdavRequest(url, 'PROPFIND', config);
+    if (checkResp.ok || checkResp.status === 207) {
+      return true;
+    }
+    // 创建目录
+    const resp = await webdavRequest(url, 'MKCOL', config);
+    return resp.ok || resp.status === 201;
+  } catch {
+    return false;
+  }
+}
+
+// 获取存储配置（含完整 config 字段）
+async function getStorageConfigById(env: Env, id: number) {
+  return await env.DB.prepare('SELECT * FROM storage_configs WHERE id = ?')
+    .bind(id)
+    .first<StorageConfig>();
 }
 
 // 获取默认存储配置
@@ -45,15 +99,15 @@ async function getDefaultStorageConfig(env: Env) {
     "SELECT * FROM storage_configs WHERE is_default = 1 AND status = 'active' LIMIT 1"
   ).first<StorageConfig>();
   if (!config) return null;
-  return { config, data: JSON.parse(config.config) as { url: string; username: string; password: string } };
+  return { config, data: JSON.parse(config.config) as WebDAVConfig };
 }
 
 // 从 WebDAV 读取文件内容
 export async function readFromWebDAV(
-  config: { url: string; username: string; password: string },
+  config: WebDAVConfig,
   storageKey: string
 ): Promise<string | null> {
-  const fileUrl = `${config.url.replace(/\/$/, '')}/${storageKey}`;
+  const fileUrl = buildWebDAVUrl(config, storageKey);
   try {
     const resp = await webdavRequest(fileUrl, 'GET', config);
     if (resp.ok) {
@@ -67,12 +121,12 @@ export async function readFromWebDAV(
 
 // 写入内容到 WebDAV
 export async function writeToWebDAV(
-  config: { url: string; username: string; password: string },
+  config: WebDAVConfig,
   storageKey: string,
   content: string,
   contentType = 'text/markdown'
 ): Promise<boolean> {
-  const fileUrl = `${config.url.replace(/\/$/, '')}/${storageKey}`;
+  const fileUrl = buildWebDAVUrl(config, storageKey);
   try {
     const resp = await webdavRequest(fileUrl, 'PUT', config, content, contentType);
     return resp.ok;
@@ -81,7 +135,70 @@ export async function writeToWebDAV(
   }
 }
 
-// 列出存储配置
+// 解析 WebDAV PROPFIND XML 响应
+function parseWebDAVXml(xml: string, baseUrl: string): Array<{
+  name: string;
+  path: string;
+  isDir: boolean;
+  size: number;
+  lastModified: string;
+}> {
+  const items: Array<{
+    name: string;
+    path: string;
+    isDir: boolean;
+    size: number;
+    lastModified: string;
+  }> = [];
+
+  // 解析每个 response 块
+  const responseRegex = /<d:response>([\s\S]*?)<\/d:response>/gi;
+  let match;
+  while ((match = responseRegex.exec(xml)) !== null) {
+    const block = match[1];
+
+    // 提取 href
+    const hrefMatch = block.match(/<d:href>([^<]+)<\/d:href>/i);
+    if (!hrefMatch) continue;
+    const href = decodeURIComponent(hrefMatch[1]);
+
+    // 提取资源类型
+    const isDir = /<d:resourcetype>[\s\S]*?<d:collection[\s/]*>[\s\S]*?<\/d:resourcetype>/i.test(block);
+
+    // 提取大小
+    const sizeMatch = block.match(/<d:getcontentlength>(\d+)<\/d:getcontentlength>/i);
+    const size = sizeMatch ? parseInt(sizeMatch[1], 10) : 0;
+
+    // 提取最后修改时间
+    const modifiedMatch = block.match(/<d:getlastmodified>([^<]+)<\/d:getlastmodified>/i);
+    const lastModified = modifiedMatch ? modifiedMatch[1] : '';
+
+    // 计算相对路径和文件名
+    const normalizedBase = baseUrl.replace(/\/$/, '');
+    let relativePath = href;
+    if (href.startsWith(normalizedBase)) {
+      relativePath = href.slice(normalizedBase.length);
+    }
+    relativePath = relativePath.replace(/^\//, '');
+
+    // 跳过目录自身
+    if (!relativePath) continue;
+
+    const name = relativePath.split('/').filter(Boolean).pop() || relativePath;
+
+    items.push({
+      name,
+      path: relativePath,
+      isDir,
+      size,
+      lastModified,
+    });
+  }
+
+  return items;
+}
+
+// 列出存储配置（返回完整信息）
 export async function listStorageConfigsHandler(
   request: Request,
   env: Env
@@ -91,10 +208,30 @@ export async function listStorageConfigsHandler(
   if (err) return err;
 
   const result = await env.DB.prepare(
-    'SELECT id, name, type, is_default, status, created_at, updated_at FROM storage_configs ORDER BY id DESC'
-  ).all();
+    'SELECT * FROM storage_configs ORDER BY id DESC'
+  ).all<StorageConfig>();
 
-  return successResponse(result.results);
+  // 解析 config JSON 并返回完整信息
+  const configs = result.results.map((c) => {
+    const configData = JSON.parse(c.config) as WebDAVConfig;
+    return {
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      is_default: c.is_default,
+      status: c.status,
+      config: {
+        url: configData.url || '',
+        username: configData.username || '',
+        path: configData.path || '',
+        stores: configData.stores || [],
+      },
+      created_at: c.created_at,
+      updated_at: c.updated_at,
+    };
+  });
+
+  return successResponse(configs);
 }
 
 // 创建存储配置
@@ -109,12 +246,16 @@ export async function createStorageConfigHandler(
   const body = await parseBody<{
     name: string;
     type: string;
-    config: Record<string, string>;
+    config: WebDAVConfig;
     is_default?: boolean;
   }>(request);
 
   if (!body?.name || !body?.type || !body?.config) {
     return errorResponse('名称、类型和配置不能为空');
+  }
+
+  if (!body.config.url) {
+    return errorResponse('WebDAV URL 不能为空');
   }
 
   const now = new Date().toISOString();
@@ -125,11 +266,25 @@ export async function createStorageConfigHandler(
     await env.DB.prepare('UPDATE storage_configs SET is_default = 0').run();
   }
 
+  // 保存完整配置（含 path 和 stores）
+  const configToSave: WebDAVConfig = {
+    url: body.config.url.replace(/\/$/, ''),
+    username: body.config.username || '',
+    password: body.config.password || '',
+    path: body.config.path || '',
+    stores: body.config.stores || [],
+  };
+
   const result = await env.DB.prepare(
-    'INSERT INTO storage_configs (name, type, config, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO storage_configs (name, type, config, is_default, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   )
-    .bind(body.name, body.type, JSON.stringify(body.config), isDefault, now, now)
+    .bind(body.name, body.type, JSON.stringify(configToSave), isDefault, 'active', now, now)
     .run();
+
+  // 如果有子目录，尝试创建
+  if (configToSave.path) {
+    await ensureWebDAVDir(configToSave, '');
+  }
 
   return successResponse({ id: result.meta.last_row_id }, '创建成功');
 }
@@ -147,12 +302,18 @@ export async function updateStorageConfigHandler(
   const body = await parseBody<Partial<{
     name: string;
     type: string;
-    config: Record<string, string>;
+    config: WebDAVConfig;
     is_default: boolean;
     status: string;
   }>>(request);
 
   if (!body) return errorResponse('无效的请求数据');
+
+  // 获取现有配置
+  const existing = await getStorageConfigById(env, parseInt(id, 10));
+  if (!existing) {
+    return errorResponse('存储配置不存在', 404);
+  }
 
   const fields: string[] = [];
   const values: (string | number)[] = [];
@@ -166,8 +327,17 @@ export async function updateStorageConfigHandler(
     values.push(body.type);
   }
   if (body.config !== undefined) {
+    // 合并配置（保留未修改的字段）
+    const existingConfig = JSON.parse(existing.config) as WebDAVConfig;
+    const mergedConfig: WebDAVConfig = {
+      url: body.config.url !== undefined ? body.config.url.replace(/\/$/, '') : existingConfig.url,
+      username: body.config.username !== undefined ? body.config.username : existingConfig.username,
+      password: body.config.password !== undefined ? body.config.password : existingConfig.password,
+      path: body.config.path !== undefined ? body.config.path : existingConfig.path,
+      stores: body.config.stores !== undefined ? body.config.stores : existingConfig.stores,
+    };
     fields.push('config = ?');
-    values.push(JSON.stringify(body.config));
+    values.push(JSON.stringify(mergedConfig));
   }
   if (body.status !== undefined) {
     fields.push('status = ?');
@@ -185,7 +355,7 @@ export async function updateStorageConfigHandler(
     return errorResponse('没有要更新的字段');
   }
 
-  fields.push('updated_at = datetime(\"now\")');
+  fields.push('updated_at = datetime("now")');
   values.push(parseInt(id, 10));
 
   await env.DB.prepare(`UPDATE storage_configs SET ${fields.join(', ')} WHERE id = ?`)
@@ -222,22 +392,45 @@ export async function testStorageConnectionHandler(
   const err = requireAdmin(auth);
   if (err) return err;
 
-  const config = await env.DB.prepare('SELECT * FROM storage_configs WHERE id = ?')
-    .bind(parseInt(id, 10))
-    .first<StorageConfig>();
-
+  const config = await getStorageConfigById(env, parseInt(id, 10));
   if (!config) {
     return errorResponse('存储配置不存在', 404);
   }
 
-  const configData = JSON.parse(config.config);
+  const configData = JSON.parse(config.config) as WebDAVConfig;
 
   if (config.type === 'webdav') {
     try {
-      const resp = await webdavRequest(configData.url, 'PROPFIND', configData);
+      const testUrl = buildWebDAVUrl(configData, '');
+      const resp = await webdavRequest(testUrl, 'PROPFIND', configData);
+
       if (resp.ok || resp.status === 207) {
-        return successResponse({ connected: true }, '连接成功');
+        // 解析响应获取目录信息
+        const text = await resp.text();
+        const items = parseWebDAVXml(text, testUrl);
+
+        return successResponse({
+          connected: true,
+          message: '连接成功',
+          url: testUrl,
+          items_count: items.length,
+          has_path: !!configData.path,
+        }, '连接成功');
       }
+
+      // 尝试创建目录后重试
+      if (resp.status === 404 && configData.path) {
+        const created = await ensureWebDAVDir(configData, '');
+        if (created) {
+          return successResponse({
+            connected: true,
+            message: '连接成功（已自动创建目录）',
+            url: testUrl,
+            created_dir: true,
+          }, '连接成功');
+        }
+      }
+
       return errorResponse(`连接失败: HTTP ${resp.status}`);
     } catch (e) {
       return errorResponse(`连接失败: ${String(e)}`);
@@ -245,6 +438,167 @@ export async function testStorageConnectionHandler(
   }
 
   return errorResponse('不支持的存储类型');
+}
+
+// 浏览 WebDAV 目录
+export async function browseWebDAVHandler(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const url = new URL(request.url);
+  const subPath = url.searchParams.get('path') || '';
+
+  const config = await getStorageConfigById(env, parseInt(id, 10));
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+
+  if (config.type !== 'webdav') {
+    return errorResponse('仅支持 WebDAV 类型');
+  }
+
+  try {
+    const browseUrl = buildWebDAVUrl(configData, subPath);
+    const resp = await webdavRequest(browseUrl, 'PROPFIND', configData);
+
+    if (!resp.ok && resp.status !== 207) {
+      return errorResponse(`读取目录失败: HTTP ${resp.status}`);
+    }
+
+    const text = await resp.text();
+    const items = parseWebDAVXml(text, browseUrl);
+
+    return successResponse({
+      path: subPath,
+      items,
+      url: browseUrl,
+    });
+  } catch (e) {
+    return errorResponse(`读取目录失败: ${String(e)}`);
+  }
+}
+
+// 创建 WebDAV 目录
+export async function createWebDAVDirHandler(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const body = await parseBody<{ path: string }>(request);
+  if (!body?.path) {
+    return errorResponse('目录路径不能为空');
+  }
+
+  const config = await getStorageConfigById(env, parseInt(id, 10));
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+
+  try {
+    const dirUrl = buildWebDAVUrl(configData, body.path);
+    const resp = await webdavRequest(dirUrl, 'MKCOL', configData);
+
+    if (resp.ok || resp.status === 201) {
+      return successResponse(null, '目录创建成功');
+    }
+    return errorResponse(`创建目录失败: HTTP ${resp.status}`);
+  } catch (e) {
+    return errorResponse(`创建目录失败: ${String(e)}`);
+  }
+}
+
+// 删除 WebDAV 文件或目录
+export async function deleteWebDAVItemHandler(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const body = await parseBody<{ path: string }>(request);
+  if (!body?.path) {
+    return errorResponse('路径不能为空');
+  }
+
+  const config = await getStorageConfigById(env, parseInt(id, 10));
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+
+  try {
+    const itemUrl = buildWebDAVUrl(configData, body.path);
+    const resp = await webdavRequest(itemUrl, 'DELETE', configData);
+
+    if (resp.ok || resp.status === 204) {
+      return successResponse(null, '删除成功');
+    }
+    return errorResponse(`删除失败: HTTP ${resp.status}`);
+  } catch (e) {
+    return errorResponse(`删除失败: ${String(e)}`);
+  }
+}
+
+// 读取 WebDAV 文件内容
+export async function readWebDAVFileHandler(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const url = new URL(request.url);
+  const filePath = url.searchParams.get('path') || '';
+
+  if (!filePath) {
+    return errorResponse('文件路径不能为空');
+  }
+
+  const config = await getStorageConfigById(env, parseInt(id, 10));
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+
+  try {
+    const fileUrl = buildWebDAVUrl(configData, filePath);
+    const resp = await webdavRequest(fileUrl, 'GET', configData);
+
+    if (!resp.ok) {
+      return errorResponse(`读取文件失败: HTTP ${resp.status}`);
+    }
+
+    const content = await resp.text();
+    const contentType = resp.headers.get('Content-Type') || 'text/plain';
+
+    return successResponse({
+      path: filePath,
+      content,
+      content_type: contentType,
+      size: content.length,
+    });
+  } catch (e) {
+    return errorResponse(`读取文件失败: ${String(e)}`);
+  }
 }
 
 // 列出某用户某功能的存储文件 (用于获取最新版本)
@@ -269,26 +623,19 @@ export async function listStorageFilesHandler(
   if (storage.config.type === 'webdav') {
     try {
       const prefix = `${auth.userId}_${functionName}_`;
-      // WebDAV PROPFIND 列出目录
-      const resp = await webdavRequest(configData.url, 'PROPFIND', configData);
+      const listUrl = buildWebDAVUrl(configData, '');
+      const resp = await webdavRequest(listUrl, 'PROPFIND', configData);
       const text = await resp.text();
 
-      // 简单解析 XML 提取文件名
-      const fileRegex = /<d:href>([^<]+)<\/d:href>/g;
-      const files: { name: string; timestamp: number }[] = [];
-      let match;
-      while ((match = fileRegex.exec(text)) !== null) {
-        const href = decodeURIComponent(match[1]);
-        const fileName = href.split('/').pop() || '';
-        if (fileName.startsWith(prefix) && fileName.endsWith('.md')) {
-          const parsed = parseStorageKey(fileName);
-          if (parsed) {
-            files.push({ name: fileName, timestamp: parsed.timestamp });
-          }
-        }
-      }
+      const items = parseWebDAVXml(text, listUrl);
+      const files = items
+        .filter((item) => !item.isDir && item.name.startsWith(prefix) && item.name.endsWith('.md'))
+        .map((item) => {
+          const parsed = parseStorageKey(item.name);
+          return { name: item.name, timestamp: parsed?.timestamp || 0 };
+        })
+        .sort((a, b) => b.timestamp - a.timestamp);
 
-      files.sort((a, b) => b.timestamp - a.timestamp);
       return successResponse({ files, enabled: true, config_id: storage.config.id });
     } catch (e) {
       return errorResponse(`获取文件列表失败: ${String(e)}`);
@@ -310,7 +657,7 @@ export async function saveToStorageHandler(
   const body = await parseBody<{
     function_name: string;
     content: string;
-    reference_id?: number; // 关联的文章/评论ID
+    reference_id?: number;
   }>(request);
 
   if (!body?.function_name || !body?.content) {
@@ -325,42 +672,38 @@ export async function saveToStorageHandler(
   const configData = storage.data;
   const timestamp = Date.now();
   const fileName = generateStorageKey(auth.userId!, body.function_name, timestamp);
-  const fileUrl = `${configData.url.replace(/\/$/, '')}/${fileName}`;
+
+  // 确保目录存在
+  await ensureWebDAVDir(configData, body.function_name);
+
+  const fileUrl = buildWebDAVUrl(configData, `${body.function_name}/${fileName}`);
 
   if (storage.config.type === 'webdav') {
     try {
-      // 上传新文件
       const uploadResp = await webdavRequest(fileUrl, 'PUT', configData, body.content);
       if (!uploadResp.ok) {
         return errorResponse(`上传失败: HTTP ${uploadResp.status}`);
       }
 
-      // 清理旧版本 (保留最近 3 个版本以防误删)
+      // 清理旧版本
       const prefix = `${auth.userId}_${body.function_name}_`;
-      const listResp = await webdavRequest(configData.url, 'PROPFIND', configData);
+      const listUrl = buildWebDAVUrl(configData, body.function_name);
+      const listResp = await webdavRequest(listUrl, 'PROPFIND', configData);
       const listText = await listResp.text();
 
-      const fileRegex = /<d:href>([^<]+)<\/d:href>/g;
-      const oldFiles: string[] = [];
-      let match;
-      while ((match = fileRegex.exec(listText)) !== null) {
-        const href = decodeURIComponent(match[1]);
-        const fn = href.split('/').pop() || '';
-        if (fn.startsWith(prefix) && fn.endsWith('.md') && fn !== fileName) {
-          oldFiles.push(fn);
-        }
-      }
+      const items = parseWebDAVXml(listText, listUrl);
+      const oldFiles = items
+        .filter((item) => !item.isDir && item.name.startsWith(prefix) && item.name.endsWith('.md') && item.name !== fileName)
+        .map((item) => item.name)
+        .sort((a, b) => {
+          const pa = parseStorageKey(a);
+          const pb = parseStorageKey(b);
+          return (pb?.timestamp || 0) - (pa?.timestamp || 0);
+        });
 
-      // 按时间戳排序，删除除最新 3 个外的旧文件
-      oldFiles.sort((a, b) => {
-        const pa = parseStorageKey(a);
-        const pb = parseStorageKey(b);
-        return (pb?.timestamp || 0) - (pa?.timestamp || 0);
-      });
-
-      const toDelete = oldFiles.slice(3); // 保留最近 3 个
+      const toDelete = oldFiles.slice(3);
       for (const oldFile of toDelete) {
-        const oldUrl = `${configData.url.replace(/\/$/, '')}/${oldFile}`;
+        const oldUrl = buildWebDAVUrl(configData, `${body.function_name}/${oldFile}`);
         try {
           await webdavRequest(oldUrl, 'DELETE', configData);
         } catch {
@@ -385,6 +728,236 @@ export async function saveToStorageHandler(
   return errorResponse('不支持的存储类型');
 }
 
+// 数据迁移：D1 → WebDAV
+export async function migrateToWebDAVHandler(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const body = await parseBody<{
+    config_id: number;
+    type: string; // posts, comments, users
+    limit?: number;
+  }>(request);
+
+  if (!body?.config_id || !body?.type) {
+    return errorResponse('配置ID和数据类型不能为空');
+  }
+
+  const config = await getStorageConfigById(env, body.config_id);
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+  const limit = body.limit || 100;
+
+  try {
+    let migrated = 0;
+    let errors = 0;
+
+    if (body.type === 'posts') {
+      // 迁移文章内容到 WebDAV
+      const posts = await env.DB.prepare(
+        "SELECT id, author_id, content_md, storage_key FROM posts WHERE status != 'deleted' AND (storage_key IS NULL OR storage_key = '') LIMIT ?"
+      ).bind(limit).all<{ id: number; author_id: number; content_md: string; storage_key: string | null }>();
+
+      for (const post of posts.results) {
+        const storageKey = `posts/${post.author_id}_post_${Date.now()}_${post.id}.md`;
+        const saved = await writeToWebDAV(configData, storageKey, post.content_md);
+        if (saved) {
+          await env.DB.prepare(
+            "UPDATE posts SET storage_key = ?, storage_version = 1 WHERE id = ?"
+          ).bind(storageKey, post.id).run();
+          migrated++;
+        } else {
+          errors++;
+        }
+      }
+    } else if (body.type === 'comments') {
+      // 迁移评论内容到 WebDAV
+      const comments = await env.DB.prepare(
+        "SELECT id, author_id, content_md, storage_key FROM comments WHERE status != 'deleted' AND (storage_key IS NULL OR storage_key = '') LIMIT ?"
+      ).bind(limit).all<{ id: number; author_id: number; content_md: string; storage_key: string | null }>();
+
+      for (const comment of comments.results) {
+        const storageKey = `comments/${comment.author_id}_comment_${Date.now()}_${comment.id}.md`;
+        const saved = await writeToWebDAV(configData, storageKey, comment.content_md);
+        if (saved) {
+          await env.DB.prepare(
+            "UPDATE comments SET storage_key = ?, storage_version = 1 WHERE id = ?"
+          ).bind(storageKey, comment.id).run();
+          migrated++;
+        } else {
+          errors++;
+        }
+      }
+    } else if (body.type === 'users') {
+      // 迁移用户资料到 WebDAV
+      const users = await env.DB.prepare(
+        "SELECT id, bio FROM users WHERE bio IS NOT NULL AND bio != '' LIMIT ?"
+      ).bind(limit).all<{ id: number; bio: string }>();
+
+      for (const user of users.results) {
+        const storageKey = `users/${user.id}_profile_${Date.now()}.json`;
+        const saved = await writeToWebDAV(configData, storageKey, JSON.stringify({ bio: user.bio }), 'application/json');
+        if (saved) {
+          migrated++;
+        } else {
+          errors++;
+        }
+      }
+    } else {
+      return errorResponse('不支持的数据类型');
+    }
+
+    return successResponse({
+      type: body.type,
+      migrated,
+      errors,
+      limit,
+    }, `迁移完成: 成功 ${migrated} 条，失败 ${errors} 条`);
+  } catch (e) {
+    return errorResponse(`迁移失败: ${String(e)}`);
+  }
+}
+
+// 数据清理：清理 WebDAV 中的旧数据
+export async function cleanupWebDAVHandler(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const body = await parseBody<{
+    config_id: number;
+    type: string; // posts, comments, users, images
+    keep_latest?: number; // 保留最近N个版本
+  }>(request);
+
+  if (!body?.config_id || !body?.type) {
+    return errorResponse('配置ID和数据类型不能为空');
+  }
+
+  const config = await getStorageConfigById(env, body.config_id);
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+  const keepLatest = body.keep_latest || 3;
+
+  try {
+    const dirUrl = buildWebDAVUrl(configData, body.type);
+    const resp = await webdavRequest(dirUrl, 'PROPFIND', configData);
+
+    if (!resp.ok && resp.status !== 207) {
+      return errorResponse(`读取目录失败: HTTP ${resp.status}`);
+    }
+
+    const text = await resp.text();
+    const items = parseWebDAVXml(text, dirUrl);
+
+    // 按用户分组
+    const userFiles: Record<string, string[]> = {};
+    for (const item of items) {
+      if (item.isDir) continue;
+      const match = item.name.match(/^(\d+)_/);
+      if (match) {
+        const userId = match[1];
+        if (!userFiles[userId]) userFiles[userId] = [];
+        userFiles[userId].push(item.name);
+      }
+    }
+
+    let deleted = 0;
+    let kept = 0;
+
+    // 每个用户保留最新N个，删除其余
+    for (const userId of Object.keys(userFiles)) {
+      const files = userFiles[userId].sort((a, b) => {
+        const pa = parseStorageKey(a);
+        const pb = parseStorageKey(b);
+        return (pb?.timestamp || 0) - (pa?.timestamp || 0);
+      });
+
+      const toDelete = files.slice(keepLatest);
+      const toKeep = files.slice(0, keepLatest);
+
+      for (const file of toDelete) {
+        const fileUrl = buildWebDAVUrl(configData, `${body.type}/${file}`);
+        try {
+          await webdavRequest(fileUrl, 'DELETE', configData);
+          deleted++;
+        } catch {
+          // 忽略
+        }
+      }
+      kept += toKeep.length;
+    }
+
+    return successResponse({
+      type: body.type,
+      deleted,
+      kept,
+    }, `清理完成: 删除 ${deleted} 个文件，保留 ${kept} 个`);
+  } catch (e) {
+    return errorResponse(`清理失败: ${String(e)}`);
+  }
+}
+
+// 获取存储统计信息
+export async function storageStatsHandler(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const config = await getStorageConfigById(env, parseInt(id, 10));
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+
+  try {
+    const stats: Record<string, { count: number; size: number }> = {};
+
+    // 统计各目录
+    for (const dir of ['posts', 'comments', 'users', 'images']) {
+      const dirUrl = buildWebDAVUrl(configData, dir);
+      try {
+        const resp = await webdavRequest(dirUrl, 'PROPFIND', configData);
+        if (resp.ok || resp.status === 207) {
+          const text = await resp.text();
+          const items = parseWebDAVXml(text, dirUrl);
+          const files = items.filter((i) => !i.isDir);
+          stats[dir] = {
+            count: files.length,
+            size: files.reduce((sum, f) => sum + f.size, 0),
+          };
+        } else {
+          stats[dir] = { count: 0, size: 0 };
+        }
+      } catch {
+        stats[dir] = { count: 0, size: 0 };
+      }
+    }
+
+    return successResponse({ config_id: config.id, stats });
+  } catch (e) {
+    return errorResponse(`获取统计失败: ${String(e)}`);
+  }
+}
+
 // 图片上传
 export async function uploadImageHandler(
   request: Request,
@@ -405,7 +978,6 @@ export async function uploadImageHandler(
   let mimeType: string;
 
   if (contentType.includes('multipart/form-data')) {
-    // multipart 上传
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     if (!file) {
@@ -415,7 +987,6 @@ export async function uploadImageHandler(
     fileName = file.name;
     mimeType = file.type || 'image/jpeg';
   } else {
-    // JSON 上传 (base64)
     const body = await parseBody<{ data: string; filename?: string; mime?: string }>(request);
     if (!body?.data) {
       return errorResponse('请提供图片数据');
@@ -431,32 +1002,31 @@ export async function uploadImageHandler(
     mimeType = body.mime || 'image/jpeg';
   }
 
-  // 验证文件大小 (5MB)
   if (imageBuffer.byteLength > 5 * 1024 * 1024) {
     return errorResponse('文件大小不能超过 5MB');
   }
 
-  // 验证文件类型
   const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
   if (!allowedTypes.includes(mimeType)) {
     return errorResponse('仅支持 JPG/PNG/GIF/WebP/SVG 格式');
   }
 
-  // 生成存储路径
   const ext = fileName.split('.').pop() || 'jpg';
   const date = new Date();
   const datePath = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}`;
   const storageKey = `images/${datePath}/${auth.userId}_${Date.now()}.${ext}`;
-  const configData = storage.data;
-  const fileUrl = `${configData.url.replace(/\/$/, '')}/${storageKey}`;
+
+  // 确保目录存在
+  await ensureWebDAVDir(storage.data, `images/${datePath}`);
+
+  const fileUrl = buildWebDAVUrl(storage.data, storageKey);
 
   try {
-    const resp = await webdavRequest(fileUrl, 'PUT', configData, imageBuffer, mimeType);
+    const resp = await webdavRequest(fileUrl, 'PUT', storage.data, imageBuffer, mimeType);
     if (!resp.ok) {
       return errorResponse(`上传失败: HTTP ${resp.status}`);
     }
 
-    // 返回可访问的 URL
     const publicUrl = `/api/storage/images/${storageKey}`;
     return successResponse({
       url: publicUrl,
@@ -480,11 +1050,10 @@ export async function serveImageHandler(
     return errorResponse('存储未配置', 404);
   }
 
-  const configData = storage.data;
-  const fileUrl = `${configData.url.replace(/\/$/, '')}/${storageKey}`;
+  const fileUrl = buildWebDAVUrl(storage.data, storageKey);
 
   try {
-    const authHeader = `Basic ${btoa(`${configData.username}:${configData.password}`)}`;
+    const authHeader = `Basic ${btoa(`${storage.data.username}:${storage.data.password}`)}`;
     const resp = await fetch(fileUrl, {
       method: 'GET',
       headers: { Authorization: authHeader },

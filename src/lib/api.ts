@@ -247,6 +247,60 @@ export const storageApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // 浏览 WebDAV 目录
+  browse: (id: number, path?: string) => {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    return request<{
+      path: string;
+      items: Array<{ name: string; path: string; isDir: boolean; size: number; lastModified: string }>;
+      url: string;
+    }>(`/storage/configs/${id}/browse?${params.toString()}`);
+  },
+
+  // 创建 WebDAV 目录
+  mkdir: (id: number, path: string) =>
+    request(`/storage/configs/${id}/mkdir`, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+
+  // 删除 WebDAV 文件/目录
+  deleteItem: (id: number, path: string) =>
+    request(`/storage/configs/${id}/delete-item`, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+
+  // 读取 WebDAV 文件内容
+  readFile: (id: number, path: string) => {
+    const params = new URLSearchParams();
+    params.set('path', path);
+    return request<{ path: string; content: string; content_type: string; size: number }>(
+      `/storage/configs/${id}/read-file?${params.toString()}`
+    );
+  },
+
+  // 获取存储统计
+  getStats: (id: number) =>
+    request<{ config_id: number; stats: Record<string, { count: number; size: number }> }>(
+      `/storage/configs/${id}/stats`
+    ),
+
+  // 数据迁移 D1 → WebDAV
+  migrate: (data: { config_id: number; type: string; limit?: number }) =>
+    request<{ type: string; migrated: number; errors: number; limit: number }>('/storage/migrate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // 数据清理
+  cleanup: (data: { config_id: number; type: string; keep_latest?: number }) =>
+    request<{ type: string; deleted: number; kept: number }>('/storage/cleanup', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 };
 
 // ============ 首次配置 API ============
