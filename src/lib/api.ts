@@ -283,6 +283,13 @@ export const storageApi = {
       body: JSON.stringify({ path }),
     }),
 
+  // 重命名 WebDAV 文件/目录
+  renameItem: (id: number, oldPath: string, newName: string) =>
+    request<{ newPath: string }>(`/storage/configs/${id}/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ oldPath, newName }),
+    }),
+
   // 读取 WebDAV 文件内容
   readFile: (id: number, path: string) => {
     const params = new URLSearchParams();

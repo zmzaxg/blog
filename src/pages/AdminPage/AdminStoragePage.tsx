@@ -80,6 +80,10 @@ export default function AdminStoragePage() {
   const [newDirName, setNewDirName] = useState('');
   const [showMkdirDialog, setShowMkdirDialog] = useState(false);
 
+  // 重命名状态
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [newName, setNewName] = useState('');
+
   // 文件预览状态
   const [previewContent, setPreviewContent] = useState<{ path: string; content: string; content_type: string; size: number } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -328,6 +332,24 @@ export default function AdminStoragePage() {
       }
     } catch {
       toast.error('删除失败');
+    }
+  };
+
+  // 重命名
+  const handleRename = async () => {
+    if (!browsingConfigId || !renamingPath || !newName) return;
+    try {
+      const res = await storageApi.renameItem(browsingConfigId, renamingPath, newName);
+      if (res.success) {
+        toast.success('重命名成功');
+        setRenamingPath(null);
+        setNewName('');
+        handleBrowse(browsingConfigId, browsingPath);
+      } else {
+        toast.error(res.message || '重命名失败');
+      }
+    } catch {
+      toast.error('重命名失败');
     }
   };
 
@@ -838,6 +860,18 @@ export default function AdminStoragePage() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            className="h-7 w-7"
+                            onClick={() => {
+                              setRenamingPath(item.path);
+                              setNewName(item.name);
+                            }}
+                            title="重命名"
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             className="h-7 w-7 text-destructive"
                             onClick={() => handleDeleteItem(item.path)}
                             title="删除"
@@ -912,6 +946,7 @@ export default function AdminStoragePage() {
                   onChange={(e) => setNewDirName(e.target.value)}
                   placeholder="新目录名称"
                   className="h-9 text-sm mt-2"
+                  onKeyDown={(e) => e.key === 'Enter' && handleMkdir()}
                 />
               </div>
               <DialogFooter>
@@ -920,6 +955,33 @@ export default function AdminStoragePage() {
                 </Button>
                 <Button size="sm" onClick={handleMkdir}>
                   创建
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* 重命名对话框 */}
+          <Dialog open={!!renamingPath} onOpenChange={(open) => { if (!open) { setRenamingPath(null); setNewName(''); } }}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>重命名</DialogTitle>
+              </DialogHeader>
+              <div className="py-4">
+                <Label className="text-xs">新名称</Label>
+                <Input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="新名称"
+                  className="h-9 text-sm mt-2"
+                  onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+                />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" size="sm" onClick={() => { setRenamingPath(null); setNewName(''); }}>
+                  取消
+                </Button>
+                <Button size="sm" onClick={handleRename}>
+                  重命名
                 </Button>
               </DialogFooter>
             </DialogContent>

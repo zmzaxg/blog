@@ -151,26 +151,28 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     lastModified: string;
   }> = [];
 
-  // 解析每个 response 块
-  const responseRegex = /<d:response>([\s\S]*?)<\/d:response>/gi;
+  // 支持多种命名空间前缀: d:, D:, 或无前缀
+  const responseRegex = /<(?:d:|D:)?response>([\s\S]*?)<\/(?:d:|D:)?response>/gi;
   let match;
   while ((match = responseRegex.exec(xml)) !== null) {
     const block = match[1];
 
-    // 提取 href
-    const hrefMatch = block.match(/<d:href>([^<]+)<\/d:href>/i);
+    // 提取 href (支持 d:, D:, 无前缀)
+    const hrefMatch = block.match(/<(?:d:|D:)?href>([^<]+)<\/(?:d:|D:)?href>/i);
     if (!hrefMatch) continue;
     const href = decodeURIComponent(hrefMatch[1]);
 
-    // 提取资源类型
-    const isDir = /<d:resourcetype>[\s\S]*?<d:collection[\s/]*>[\s\S]*?<\/d:resourcetype>/i.test(block);
+    // 提取资源类型 - 检测是否为目录
+    // 支持多种格式: <d:collection/>, <d:collection></d:collection>, <collection/>
+    const isDir = /<(?:d:|D:)?resourcetype>[\s\S]*<(?:d:|D:)?collection[\s/]*>[\s\S]*<\/(?:d:|D:)?resourcetype>/i.test(block) ||
+                 /<(?:d:|D:)?resourcetype>\s*<(?:d:|D:)?collection\s*\/?>\s*<\/(?:d:|D:)?resourcetype>/i.test(block);
 
     // 提取大小
-    const sizeMatch = block.match(/<d:getcontentlength>(\d+)<\/d:getcontentlength>/i);
+    const sizeMatch = block.match(/<(?:d:|D:)?getcontentlength>(\d+)<\/(?:d:|D:)?getcontentlength>/i);
     const size = sizeMatch ? parseInt(sizeMatch[1], 10) : 0;
 
     // 提取最后修改时间
-    const modifiedMatch = block.match(/<d:getlastmodified>([^<]+)<\/d:getlastmodified>/i);
+    const modifiedMatch = block.match(/<(?:d:|D:)?getlastmodified>([^<]+)<\/(?:d:|D:)?getlastmodified>/i);
     const lastModified = modifiedMatch ? modifiedMatch[1] : '';
 
     // 计算相对路径和文件名
@@ -181,15 +183,18 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     }
     relativePath = relativePath.replace(/^\//, '');
 
+    // 也通过 URL 结尾的 / 来判断目录
+    const isDirByPath = href.endsWith('/') && !relativePath.endsWith('/');
+
     // 跳过目录自身
-    if (!relativePath) continue;
+    if (!relativePath || relativePath === '') continue;
 
     const name = relativePath.split('/').filter(Boolean).pop() || relativePath;
 
     items.push({
       name,
       path: relativePath,
-      isDir,
+      isDir: isDir || isDirByPath,
       size,
       lastModified,
     });
@@ -552,6 +557,58 @@ export async function deleteWebDAVItemHandler(
     return errorResponse(`删除失败: HTTP ${resp.status}`);
   } catch (e) {
     return errorResponse(`删除失败: ${String(e)}`);
+  }
+}
+
+// 重命名 WebDAV 文件或目录
+export async function renameWebDAVItemHandler(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const body = await parseBody<{ oldPath: string; newName: string }>(request);
+  if (!body?.oldPath || !body?.newName) {
+    return errorResponse('原路径和新名称不能为空');
+  }
+
+  const config = await getStorageConfigById(env, parseInt(id, 10));
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+
+  // 计算新路径（同目录下）
+  const pathParts = body.oldPath.split('/');
+  pathParts.pop(); // 移除旧文件名
+  pathParts.push(body.newName); // 添加新文件名
+  const newPath = pathParts.join('/');
+
+  try {
+    const oldUrl = buildWebDAVUrl(configData, body.oldPath);
+    const newUrl = buildWebDAVUrl(configData, newPath);
+
+    // WebDAV MOVE 方法用于重命名
+    const authHeader = `Basic ${btoa(`${configData.username}:${configData.password}`)}`;
+    const resp = await fetch(oldUrl, {
+      method: 'MOVE',
+      headers: {
+        Authorization: authHeader,
+        Destination: newUrl,
+        Overwrite: 'T',
+      },
+    });
+
+    if (resp.ok || resp.status === 201 || resp.status === 204) {
+      return successResponse({ newPath }, '重命名成功');
+    }
+    return errorResponse(`重命名失败: HTTP ${resp.status}`);
+  } catch (e) {
+    return errorResponse(`重命名失败: ${String(e)}`);
   }
 }
 

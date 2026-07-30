@@ -365,7 +365,24 @@ export default function AdminSettingsPage() {
                 variant="outline"
                 size="sm"
                 className="w-full"
-                onClick={() => toast.info('测试邮件功能开发中')}
+                onClick={async () => {
+                  const to = prompt('请输入测试收件邮箱:');
+                  if (!to) return;
+                  try {
+                    const res = await adminApi.sendTestEmail({
+                      to,
+                      subject: '轻社区博客 - 邮件测试',
+                      content: '<h2>邮件测试成功！</h2><p>如果你看到这封邮件，说明 SMTP 配置正确。</p>',
+                    });
+                    if (res.success) {
+                      toast.success('测试邮件发送成功');
+                    } else {
+                      toast.error(res.message || '发送失败');
+                    }
+                  } catch {
+                    toast.error('发送失败，请检查 SMTP 配置');
+                  }
+                }}
               >
                 发送测试邮件
               </Button>

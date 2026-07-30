@@ -21,7 +21,7 @@ export default function BottomTabBar() {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card/95 backdrop-blur-md">
-      <div className="mx-auto flex max-w-[430px] items-center justify-around px-2 py-2">
+      <div className="mx-auto flex max-w-screen-sm items-center justify-around px-2 py-2">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive =

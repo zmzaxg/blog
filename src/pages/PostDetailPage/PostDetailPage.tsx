@@ -407,7 +407,7 @@ export default function PostDetailPage() {
 
       {/* 底部操作栏 */}
       <div className="fixed bottom-16 left-0 right-0 z-40 border-t border-border/50 bg-card/95 backdrop-blur-md">
-        <div className="mx-auto flex max-w-[430px] items-center gap-3 px-4 py-3">
+        <div className="mx-auto flex max-w-screen-sm items-center gap-3 px-4 py-3">
           <div className="flex-1">
             <input
               type="text"

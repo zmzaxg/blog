@@ -51,6 +51,7 @@ import {
   browseWebDAVHandler,
   createWebDAVDirHandler,
   deleteWebDAVItemHandler,
+  renameWebDAVItemHandler,
   readWebDAVFileHandler,
   migrateToWebDAVHandler,
   cleanupWebDAVHandler,
@@ -288,6 +289,12 @@ async function handleApiRoutes(
   m = matchRoute(apiPath, '/storage/configs/:id/delete-item');
   if (m.matched && method === 'POST') {
     return deleteWebDAVItemHandler(request, env, m.params.id);
+  }
+
+  // WebDAV 重命名
+  m = matchRoute(apiPath, '/storage/configs/:id/rename');
+  if (m.matched && method === 'POST') {
+    return renameWebDAVItemHandler(request, env, m.params.id);
   }
 
   // WebDAV 读取文件
