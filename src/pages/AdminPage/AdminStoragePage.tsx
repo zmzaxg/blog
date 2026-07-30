@@ -80,6 +80,10 @@ export default function AdminStoragePage() {
   const [newDirName, setNewDirName] = useState('');
   const [showMkdirDialog, setShowMkdirDialog] = useState(false);
 
+  // 文件预览状态
+  const [previewContent, setPreviewContent] = useState<{ path: string; content: string; content_type: string; size: number } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   // 统计数据
   const [stats, setStats] = useState<Record<string, { count: number; size: number }>>({});
   const [statsLoading, setStatsLoading] = useState(false);
@@ -249,11 +253,18 @@ export default function AdminStoragePage() {
   const handleBrowse = async (configId: number, path?: string) => {
     setBrowsingConfigId(configId);
     setBrowseLoading(true);
+    setPreviewContent(null);
     try {
       const res = await storageApi.browse(configId, path || '');
       if (res.success && res.data) {
         const data = res.data as unknown as { items: FileItem[]; path: string };
-        setBrowseItems(data.items || []);
+        // 排序：目录在前，文件在后
+        const items = (data.items || []).sort((a, b) => {
+          if (a.isDir && !b.isDir) return -1;
+          if (!a.isDir && b.isDir) return 1;
+          return a.name.localeCompare(b.name);
+        });
+        setBrowseItems(items);
         setBrowsingPath(data.path || '');
       } else {
         toast.error(res.message || '读取目录失败');
@@ -264,6 +275,23 @@ export default function AdminStoragePage() {
       setBrowseItems([]);
     } finally {
       setBrowseLoading(false);
+    }
+  };
+
+  // 预览文件
+  const handlePreview = async (configId: number, filePath: string) => {
+    setPreviewLoading(true);
+    try {
+      const res = await storageApi.readFile(configId, filePath);
+      if (res.success && res.data) {
+        setPreviewContent(res.data as unknown as { path: string; content: string; content_type: string; size: number });
+      } else {
+        toast.error(res.message || '读取文件失败');
+      }
+    } catch {
+      toast.error('读取文件失败');
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -710,6 +738,7 @@ export default function AdminStoragePage() {
                         setBrowsingConfigId(null);
                         setBrowseItems([]);
                         setBrowsingPath('');
+                        setPreviewContent(null);
                       }}
                     >
                       关闭
@@ -748,7 +777,7 @@ export default function AdminStoragePage() {
                     空目录
                   </div>
                 ) : (
-                  <div className="max-h-[400px] overflow-y-auto">
+                  <div className="max-h-[500px] overflow-y-auto">
                     {/* 返回上一级 */}
                     {browsingPath && (
                       <div
@@ -765,42 +794,106 @@ export default function AdminStoragePage() {
                     {browseItems.map((item, i) => (
                       <div
                         key={i}
-                        className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/50 border-b last:border-0"
+                        className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/50 border-b last:border-0 group"
                       >
                         <div
                           className="flex items-center gap-3 flex-1 cursor-pointer min-w-0"
                           onClick={() => {
                             if (item.isDir) {
                               handleBrowse(browsingConfigId, item.path);
+                            } else {
+                              handlePreview(browsingConfigId, item.path);
                             }
                           }}
                         >
                           {item.isDir ? (
-                            <Folder className="h-4 w-4 shrink-0 text-blue-500" />
+                            <div className="flex h-8 w-8 items-center justify-center rounded bg-blue-500/10">
+                              <Folder className="h-4 w-4 text-blue-500" />
+                            </div>
                           ) : (
-                            <File className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <div className="flex h-8 w-8 items-center justify-center rounded bg-muted">
+                              <File className="h-4 w-4 text-muted-foreground" />
+                            </div>
                           )}
                           <div className="min-w-0">
-                            <div className="text-sm truncate">{item.name}</div>
-                            {!item.isDir && (
-                              <div className="text-[10px] text-muted-foreground">
-                                {formatSize(item.size)}
-                                {item.lastModified && ` · ${new Date(item.lastModified).toLocaleDateString('zh-CN')}`}
-                              </div>
-                            )}
+                            <div className="text-sm font-medium truncate">{item.name}</div>
+                            <div className="text-[10px] text-muted-foreground">
+                              {item.isDir ? '文件夹' : formatSize(item.size)}
+                              {!item.isDir && item.lastModified && ` · ${new Date(item.lastModified).toLocaleDateString('zh-CN')}`}
+                            </div>
                           </div>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 shrink-0 text-destructive"
-                          onClick={() => handleDeleteItem(item.path)}
-                        >
-                          <Trash className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {!item.isDir && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => handlePreview(browsingConfigId, item.path)}
+                              title="预览"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-destructive"
+                            onClick={() => handleDeleteItem(item.path)}
+                            title="删除"
+                          >
+                            <Trash className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 文件预览 */}
+          {previewContent && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Eye className="h-4 w-4" />
+                    文件预览: {previewContent.path.split('/').pop()}
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground">
+                      {formatSize(previewContent.size)} · {previewContent.content_type}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setPreviewContent(null)}
+                    >
+                      关闭
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {previewLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : previewContent.content_type.startsWith('image/') ? (
+                  <div className="flex justify-center">
+                    <img
+                      src={`data:${previewContent.content_type};base64,${btoa(previewContent.content)}`}
+                      alt=""
+                      className="max-w-full max-h-[400px] rounded border"
+                    />
+                  </div>
+                ) : (
+                  <pre className="max-h-[400px] overflow-auto rounded bg-muted p-4 text-xs font-mono whitespace-pre-wrap">
+                    {previewContent.content}
+                  </pre>
                 )}
               </CardContent>
             </Card>
@@ -838,8 +931,8 @@ export default function AdminStoragePage() {
           <Alert className="border-warning/30 bg-warning/10">
             <ArrowUpDown className="h-4 w-4 text-warning" />
             <AlertDescription className="text-xs">
-              数据迁移功能可以将 D1 数据库中的内容迁移到 WebDAV 存储，或清理 WebDAV 中的旧数据。
-              迁移后数据库中仅保留索引，内容从 WebDAV 读取。
+              数据迁移功能可以将 D1 数据库中的内容迁移到 WebDAV 存储，或反向迁移。
+              同时支持清理 D1 和 WebDAV 中的数据。
             </AlertDescription>
           </Alert>
 
@@ -864,10 +957,13 @@ export default function AdminStoragePage() {
                     {config.config?.path && ` / ${config.config.path}`}
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  {/* 迁移 */}
+                <CardContent className="space-y-5">
+                  {/* D1 → WebDAV 迁移 */}
                   <div>
-                    <h4 className="text-sm font-medium mb-2">D1 → WebDAV 迁移</h4>
+                    <h4 className="text-sm font-medium mb-1">D1 → WebDAV 迁移</h4>
+                    <p className="text-[10px] text-muted-foreground mb-2">
+                      将数据库中的内容上传到 WebDAV，数据库仅保留索引
+                    </p>
                     <div className="grid grid-cols-3 gap-2">
                       {['posts', 'comments', 'users'].map((type) => (
                         <Button
@@ -889,11 +985,11 @@ export default function AdminStoragePage() {
                     </div>
                   </div>
 
-                  {/* 清理 */}
+                  {/* WebDAV 数据清理 */}
                   <div>
-                    <h4 className="text-sm font-medium mb-2">WebDAV 数据清理</h4>
+                    <h4 className="text-sm font-medium mb-1">WebDAV 数据清理</h4>
                     <p className="text-[10px] text-muted-foreground mb-2">
-                      清理旧版本文件，每个用户保留最新 3 个版本
+                      清理 WebDAV 中的旧版本文件，每个用户保留最新 3 个版本
                     </p>
                     <div className="grid grid-cols-4 gap-2">
                       {['posts', 'comments', 'users', 'images'].map((type) => (
@@ -914,6 +1010,43 @@ export default function AdminStoragePage() {
                         </Button>
                       ))}
                     </div>
+                  </div>
+
+                  {/* D1 数据清理 */}
+                  <div>
+                    <h4 className="text-sm font-medium mb-1">D1 数据清理</h4>
+                    <p className="text-[10px] text-muted-foreground mb-2">
+                      清理数据库中已迁移到 WebDAV 的数据（释放数据库空间）
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 text-xs gap-1"
+                      disabled
+                    >
+                      <Trash className="h-3 w-3" />
+                      清理已迁移数据（开发中）
+                    </Button>
+                  </div>
+
+                  {/* 浏览 WebDAV 数据 */}
+                  <div>
+                    <h4 className="text-sm font-medium mb-1">浏览 WebDAV 数据</h4>
+                    <p className="text-[10px] text-muted-foreground mb-2">
+                      查看 WebDAV 中存储的文件，支持预览
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 text-xs gap-1"
+                      onClick={() => {
+                        setActiveTab('configs');
+                        handleBrowse(config.id);
+                      }}
+                    >
+                      <Folder className="h-3 w-3" />
+                      浏览文件
+                    </Button>
                   </div>
                 </CardContent>
               </Card>

@@ -41,19 +41,13 @@ export default function AdminCommentsPage() {
           setTotalPages(res.total_pages || 1);
         }
       } else {
-        // 获取所有评论（通过 admin API 或按状态筛选）
-        const res = await adminApi.pendingComments({ page, page_size: 50 });
+        // 获取所有评论
+        const params: Record<string, unknown> = { page, page_size: 20 };
+        if (status !== 'all') params.status = status;
+        if (keyword) params.keyword = keyword;
+        const res = await adminApi.allComments(params);
         if (res.success) {
-          let allComments = (res.data as unknown as IComment[]) || [];
-          if (status !== 'all') {
-            allComments = allComments.filter((c) => c.status === status);
-          }
-          if (keyword) {
-            allComments = allComments.filter((c) =>
-              c.content_md.toLowerCase().includes(keyword.toLowerCase())
-            );
-          }
-          setComments(allComments);
+          setComments((res.data as unknown as IComment[]) || []);
           setTotalPages(res.total_pages || 1);
         }
       }

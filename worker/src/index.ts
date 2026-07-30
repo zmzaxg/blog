@@ -36,6 +36,7 @@ import {
   getSettingsHandler,
   updateSettingsHandler,
   pendingCommentsHandler,
+  listAllCommentsHandler,
 } from './routes/admin';
 import {
   listStorageConfigsHandler,
@@ -248,6 +249,10 @@ async function handleApiRoutes(
 
   m = matchRoute(apiPath, '/admin/comments/pending');
   if (m.matched && method === 'GET') return pendingCommentsHandler(request, env);
+
+  // 所有评论列表
+  m = matchRoute(apiPath, '/admin/comments');
+  if (m.matched && method === 'GET') return listAllCommentsHandler(request, env);
 
   // ============ 存储配置 ============
   m = matchRoute(apiPath, '/storage/configs');

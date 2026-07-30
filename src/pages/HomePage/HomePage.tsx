@@ -138,15 +138,15 @@ export default function HomePage() {
       {/* 板块切换 */}
       <div className="px-4">
         <Tabs defaultValue="all" className="w-full">
-          <TabsList className="h-9 w-full gap-1 overflow-x-auto bg-muted/50">
-            <TabsTrigger value="all" className="h-7 text-xs" onClick={() => { setActiveBoard('all'); setPage(1); }}>
+          <TabsList className="h-9 w-full justify-start gap-1 overflow-x-auto bg-muted/50">
+            <TabsTrigger value="all" className="h-7 shrink-0 text-xs" onClick={() => { setActiveBoard('all'); setPage(1); }}>
               全部
             </TabsTrigger>
             {boards.map((board) => (
               <TabsTrigger
                 key={board.id}
                 value={board.slug}
-                className="h-7 whitespace-nowrap text-xs"
+                className="h-7 shrink-0 whitespace-nowrap text-xs"
                 onClick={() => { setActiveBoard(board.id); setPage(1); }}
               >
                 {board.icon} {board.name}

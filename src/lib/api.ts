@@ -184,6 +184,16 @@ export const adminApi = {
     );
   },
 
+  allComments: (params: { page?: number; page_size?: number; status?: string; keyword?: string } = {}) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) searchParams.set(k, String(v));
+    });
+    return request<Array<Record<string, unknown>>>(
+      `/admin/comments?${searchParams.toString()}`
+    );
+  },
+
   sendTestEmail: (data: { to: string; subject: string; content: string }) =>
     request('/admin/email/test', { method: 'POST', body: JSON.stringify(data) }),
 };

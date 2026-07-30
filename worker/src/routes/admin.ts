@@ -184,6 +184,55 @@ export async function updateSettingsHandler(
   return successResponse(null, '设置已更新');
 }
 
+// 所有评论列表（支持筛选）
+export async function listAllCommentsHandler(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const { page, pageSize, offset } = getPagination(request.url);
+  const url = new URL(request.url);
+  const status = url.searchParams.get('status');
+  const keyword = url.searchParams.get('keyword');
+
+  let where = 'WHERE 1=1';
+  const params: (string | number)[] = [];
+
+  if (status && status !== 'all') {
+    where += ' AND c.status = ?';
+    params.push(status);
+  } else {
+    // 排除已删除
+    where += " AND c.status != 'deleted'";
+  }
+
+  if (keyword) {
+    where += ' AND c.content_md LIKE ?';
+    params.push(`%${keyword}%`);
+  }
+
+  const countResult = await env.DB.prepare(
+    `SELECT COUNT(*) as cnt FROM comments c ${where}`
+  ).bind(...params).first<{ cnt: number }>();
+
+  const total = countResult?.cnt || 0;
+
+  const comments = await env.DB.prepare(
+    `SELECT c.*, p.title as post_title, u.username, u.nickname, u.avatar as author_avatar
+     FROM comments c
+     LEFT JOIN posts p ON c.post_id = p.id
+     LEFT JOIN users u ON c.author_id = u.id
+     ${where}
+     ORDER BY c.created_at DESC
+     LIMIT ? OFFSET ?`
+  ).bind(...params, pageSize, offset).all();
+
+  return paginatedResponse(comments.results, total, page, pageSize);
+}
+
 // 待审核评论列表
 export async function pendingCommentsHandler(
   request: Request,
