@@ -1,6 +1,6 @@
 // 认证中间件
-import { verifyJwt } from './jwt';
-import { errorResponse } from './utils';
+import { verifyJwt } from '../lib/jwt';
+import { errorResponse } from '../lib/utils';
 import type { Env, AuthContext, PublicUser } from '../types';
 
 export function extractToken(request: Request): string | null {
