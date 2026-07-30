@@ -1,18 +1,11 @@
 import path from 'path'
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
+import { defineConfig } from '@lark-apaas/coding-preset-vite-react'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
       '@shared': path.resolve(__dirname, 'shared'),
     },
-  },
-  build: {
-    outDir: 'dist/client',
-    sourcemap: false,
   },
 })
