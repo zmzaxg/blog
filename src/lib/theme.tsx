@@ -16,7 +16,7 @@ const STORAGE_KEY = 'theme';
 function getStoredTheme(): ThemeMode {
   const stored = scopedStorage.getItem(STORAGE_KEY);
   if (stored === 'light' || stored === 'dark') return stored;
-  return 'dark';
+  return 'light';
 }
 
 function setStoredTheme(theme: ThemeMode) {

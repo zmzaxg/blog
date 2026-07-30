@@ -5,11 +5,11 @@ compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "nnya"
-database_id = "070abf4e-f597-4553-8785-04bbfea6feda"
+database_name = "blog_db"
+database_id = "your-database-id"
 
 [vars]
-JWT_SECRET = "mmaA123456"
+JWT_SECRET = "your-jwt-secret-change-in-production"
 SITE_NAME = "轻社区博客"
 
 # 前端静态资源 (Pages 集成或 Assets)
