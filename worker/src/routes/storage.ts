@@ -163,9 +163,15 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     const href = decodeURIComponent(hrefMatch[1]);
 
     // 提取资源类型 - 检测是否为目录
-    // 支持多种格式: <d:collection/>, <d:collection></d:collection>, <collection/>
-    const isDir = /<(?:d:|D:)?resourcetype>[\s\S]*<(?:d:|D:)?collection[\s/]*>[\s\S]*<\/(?:d:|D:)?resourcetype>/i.test(block) ||
-                 /<(?:d:|D:)?resourcetype>\s*<(?:d:|D:)?collection\s*\/?>\s*<\/(?:d:|D:)?resourcetype>/i.test(block);
+    // 多种方式判断:
+    // 1. resourcetype 中包含 collection
+    // 2. href 结尾是 /
+    // 3. 没有 getcontentlength 且没有文件扩展名
+    const hasCollection = /collection/i.test(block) && /resourcetype/i.test(block);
+    const endsWithSlash = href.endsWith('/');
+    const hasNoContentLength = !/<(?:d:|D:)?getcontentlength>\d+<\/(?:d:|D:)?getcontentlength>/i.test(block);
+    const hasNoExtension = !/\.[a-zA-Z0-9]{1,10}(?:\?|$)/.test(href.split('/').pop() || '');
+    const isDir = hasCollection || endsWithSlash || (hasNoContentLength && hasNoExtension);
 
     // 提取大小
     const sizeMatch = block.match(/<(?:d:|D:)?getcontentlength>(\d+)<\/(?:d:|D:)?getcontentlength>/i);
@@ -181,12 +187,9 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     if (href.startsWith(normalizedBase)) {
       relativePath = href.slice(normalizedBase.length);
     }
-    relativePath = relativePath.replace(/^\//, '');
+    relativePath = relativePath.replace(/^\//, '').replace(/\/$/, '');
 
-    // 也通过 URL 结尾的 / 来判断目录
-    const isDirByPath = href.endsWith('/') && !relativePath.endsWith('/');
-
-    // 跳过目录自身
+    // 跳过空路径（目录自身）
     if (!relativePath || relativePath === '') continue;
 
     const name = relativePath.split('/').filter(Boolean).pop() || relativePath;
@@ -194,7 +197,7 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     items.push({
       name,
       path: relativePath,
-      isDir: isDir || isDirByPath,
+      isDir,
       size,
       lastModified,
     });
