@@ -1,10 +1,10 @@
 // API 请求封装
-import { scopedStorage } from '@lark-apaas/client-toolkit-lite';
+// scopedStorage replaced with localStorage for browser compatibility
 
 const API_BASE = '/api';
 
 function getToken(): string | null {
-  return scopedStorage.getItem('auth_token');
+  return localStorage.getItem('auth_token');
 }
 
 export interface ApiResponse<T = unknown> {

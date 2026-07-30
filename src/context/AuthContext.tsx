@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { scopedStorage } from '@lark-apaas/client-toolkit-lite';
+// scopedStorage replaced with localStorage for browser compatibility
 import { authApi, setupApi } from '@/lib/api';
 import type { IUser } from '@/data/blog';
 
@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const token = scopedStorage.getItem('auth_token');
+    const token = localStorage.getItem('auth_token');
     if (!token) {
       setIsLoading(false);
       return;
@@ -53,11 +53,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.success && res.data) {
         setUser(res.data as IUser);
       } else {
-        scopedStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_token');
         setUser(null);
       }
     } catch {
-      scopedStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_token');
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -69,13 +69,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchUser]);
 
   const login = useCallback((token: string, userData: IUser) => {
-    scopedStorage.setItem('auth_token', token);
+    localStorage.setItem('auth_token', token);
     setUser(userData);
     setNeedsSetup(false);
   }, []);
 
   const logout = useCallback(() => {
-    scopedStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_token');
     setUser(null);
   }, []);
 

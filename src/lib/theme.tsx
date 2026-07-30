@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { scopedStorage } from '@lark-apaas/client-toolkit-lite';
+// scopedStorage replaced with localStorage for browser compatibility
 
 export type ThemeMode = 'dark' | 'light';
 
@@ -14,13 +14,13 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 const STORAGE_KEY = 'theme';
 
 function getStoredTheme(): ThemeMode {
-  const stored = scopedStorage.getItem(STORAGE_KEY);
+  const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === 'light' || stored === 'dark') return stored;
   return 'light';
 }
 
 function setStoredTheme(theme: ThemeMode) {
-  scopedStorage.setItem(STORAGE_KEY, theme);
+  localStorage.setItem(STORAGE_KEY, theme);
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
