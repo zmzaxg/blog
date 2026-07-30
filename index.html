@@ -1,39 +1,14 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>可爱小博客</title>
-<link rel="stylesheet" href="css/style.css">
-</head>
-<body>
-<header class="site-header">
-  <h1>🍯 我的小博客</h1>
-  <p>纯静态Markdown博客 · EdgeOne自动构建</p>
-</header>
-
-<div class="page-wrap">
-  <aside class="sidebar">
-    <div class="sidebar-card content-card">
-      <h3>🔍 文章搜索</h3>
-      <input id="search-input" type="text" placeholder="输入标题/内容搜索...">
-    </div>
-    <div class="sidebar-card content-card">
-      <h3>📌 最新文章</h3>
-      <ul id="latest-list"></ul>
-    </div>
-    <div class="sidebar-card content-card">
-      <h3>🏷 标签分类</h3>
-      <div id="tag-wrap"></div>
-    </div>
-  </aside>
-  <main class="main-content">
-    <div id="post-list" class="card-grid"></div>
-    <div id="empty-tip" class="empty-card content-card" style="display:none;">加载中...</div>
-  </main>
-</div>
-
-<script src="js/marked.min.js"></script>
-<script src="js/main.js"></script>
-</body>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>应用标题</title>
+    <link href="https://lf3-static.bytednsdoc.com/obj/eden-cn/ylcylz_fsph_ryhs/ljhwZthlaukjlkulzlp/feisuda/feisuda.svg" rel="shortcut icon"/>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
 </html>

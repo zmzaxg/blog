@@ -1,0 +1,58 @@
+{
+  "id": "voice_accounting_parser_1",
+  "pluginKey": "@official-plugins/ai-text-to-json",
+  "pluginVersion": "1.0.23",
+  "name": "语音记账解析",
+  "description": "将用户输入的自然语言记账内容解析为结构化的记账数据，包含金额、分类、收支类型、日期、备注字段",
+  "icon": "",
+  "paramsSchema": {
+    "type": "object",
+    "properties": {
+      "accounting_text": {
+        "type": "string",
+        "description": "用户输入的自然语言记账内容，如「昨天午饭58元」"
+      }
+    },
+    "required": [
+      "accounting_text"
+    ]
+  },
+  "formValue": {
+    "prompt": "你是一位专业的记账解析专家，擅长从自然语言记账内容中提取关键信息。\n\n请从以下记账文本中提取结构化信息：\n{{input.accounting_text}}\n\n提取规则：\n1. 金额：提取纯数字，单位为元，如文本中是「58元」则提取为58\n2. 分类：根据消费内容自动归类，常见分类包括餐饮、交通、购物、娱乐、医疗、教育、住房、工资、奖金、投资收益等\n3. 收支类型：仅返回「收入」或「支出」两种结果\n4. 日期：将相对日期转换为YYYY-MM-DD格式，如「昨天」转换为当前日期减一天，「今天」转换为当前日期，未明确说明日期则默认使用当前日期\n5. 备注：提取除上述信息外的其他补充内容，无则返回空字符串\n\n确保提取信息准确，字段值符合要求格式。",
+    "jsonStructure": [
+      {
+        "paramDescription": "记账金额，单位为元，数字类型",
+        "paramType": "Number",
+        "name": "amount"
+      },
+      {
+        "name": "category",
+        "paramDescription": "记账分类，如餐饮、交通、购物、工资等",
+        "paramType": "String"
+      },
+      {
+        "name": "transaction_type",
+        "paramDescription": "收支类型，只能是「收入」或「支出」",
+        "paramType": "String"
+      },
+      {
+        "paramType": "String",
+        "name": "date",
+        "paramDescription": "记账日期，格式为YYYY-MM-DD"
+      },
+      {
+        "name": "remark",
+        "paramDescription": "记账备注信息，无则返回空字符串",
+        "paramType": "String"
+      }
+    ],
+    "modelID": "87",
+    "modelParams": {
+      "maxTokens": 8192,
+      "temperature": 0.5
+    }
+  },
+  "createdAt": 1784593921871,
+  "updatedAt": 1784593921871,
+  "createdBy": 6851562327452467201
+}
