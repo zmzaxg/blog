@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   User,
@@ -10,17 +11,40 @@ import {
   LogOut,
   ChevronRight,
   Edit,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/context/AuthContext';
+import { postApi } from '@/lib/api';
 import { toast } from 'sonner';
 import { Image } from '@/components/ui/image';
 
 export default function ProfilePage() {
   const navigate = useNavigate();
   const { user, isLoggedIn, isAdmin, logout } = useAuth();
+  const [postCount, setPostCount] = useState(0);
+  const [loadingStats, setLoadingStats] = useState(true);
+
+  useEffect(() => {
+    if (!isLoggedIn || !user) return;
+    const fetchStats = async () => {
+      setLoadingStats(true);
+      try {
+        const res = await postApi.list({ author_id: user.id, page_size: 1 });
+        if (res.success) {
+          setPostCount(res.total || 0);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setLoadingStats(false);
+      }
+    };
+    fetchStats();
+  }, [isLoggedIn, user]);
 
   const menuItems = [
     { icon: FileText, label: '我的文章', path: '/my/posts' },
@@ -70,12 +94,11 @@ export default function ProfilePage() {
           <div className="flex items-center gap-4">
             <Avatar className="h-16 w-16 border-2 border-primary/20">
               {user?.avatar ? (
-                <Image src={user.avatar} alt="" className="h-full w-full object-cover" />
-              ) : (
-                <AvatarFallback className="text-lg">
-                  <User className="h-8 w-8" />
-                </AvatarFallback>
-              )}
+                <AvatarImage src={user.avatar} alt="" className="object-cover" />
+              ) : null}
+              <AvatarFallback className="text-lg">
+                <User className="h-8 w-8" />
+              </AvatarFallback>
             </Avatar>
             <div>
               <h2 className="text-xl font-bold">
@@ -102,15 +125,19 @@ export default function ProfilePage() {
         {/* 数据统计 */}
         <div className="mt-6 grid grid-cols-3 gap-4 text-center">
           <div>
-            <div className="text-xl font-bold">12</div>
+            {loadingStats ? (
+              <Skeleton className="mx-auto h-7 w-8" />
+            ) : (
+              <div className="text-xl font-bold">{postCount}</div>
+            )}
             <div className="text-xs text-muted-foreground">文章</div>
           </div>
           <div>
-            <div className="text-xl font-bold">48</div>
+            <div className="text-xl font-bold">-</div>
             <div className="text-xs text-muted-foreground">关注</div>
           </div>
           <div>
-            <div className="text-xl font-bold">126</div>
+            <div className="text-xl font-bold">-</div>
             <div className="text-xs text-muted-foreground">粉丝</div>
           </div>
         </div>

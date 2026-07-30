@@ -4,6 +4,9 @@ export interface Env {
   DB: D1Database;
   JWT_SECRET: string;
   SITE_NAME?: string;
+  WEBDAV_URL?: string;
+  WEBDAV_USERNAME?: string;
+  WEBDAV_PASSWORD?: string;
   ASSETS?: {
     fetch: (request: Request) => Promise<Response>;
   };

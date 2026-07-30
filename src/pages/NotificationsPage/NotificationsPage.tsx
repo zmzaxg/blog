@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   MessageSquare,
   Heart,
@@ -6,76 +7,18 @@ import {
   Bell,
   AtSign,
   CheckCheck,
-  Trash2,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { notificationApi } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
-
-interface Notification {
-  id: number;
-  type: 'comment' | 'like' | 'follow' | 'mention' | 'system';
-  content: string;
-  from_user?: { nickname: string; username: string };
-  post_title?: string;
-  is_read: number;
-  created_at: string;
-}
-
-const mockNotifications: Notification[] = [
-  {
-    id: 1,
-    type: 'comment',
-    content: '评论了你的文章',
-    from_user: { nickname: '张三', username: 'zhangsan' },
-    post_title: 'Cloudflare Worker 入门指南',
-    is_read: 0,
-    created_at: '2024-01-28T10:30:00Z',
-  },
-  {
-    id: 2,
-    type: 'like',
-    content: '赞了你的文章',
-    from_user: { nickname: '李四', username: 'lisi' },
-    post_title: 'Markdown 写作技巧',
-    is_read: 0,
-    created_at: '2024-01-28T09:15:00Z',
-  },
-  {
-    id: 3,
-    type: 'follow',
-    content: '关注了你',
-    from_user: { nickname: '王五', username: 'wangwu' },
-    is_read: 0,
-    created_at: '2024-01-27T14:20:00Z',
-  },
-  {
-    id: 4,
-    type: 'mention',
-    content: '在评论中提到了你',
-    from_user: { nickname: '赵六', username: 'zhaoliu' },
-    post_title: '前端性能优化实践',
-    is_read: 1,
-    created_at: '2024-01-26T16:45:00Z',
-  },
-  {
-    id: 5,
-    type: 'system',
-    content: '你的文章《Cloudflare Worker 入门指南》已通过审核并发布',
-    is_read: 1,
-    created_at: '2024-01-25T08:00:00Z',
-  },
-  {
-    id: 6,
-    type: 'system',
-    content: '系统将于本周六凌晨 2:00-4:00 进行维护升级',
-    is_read: 1,
-    created_at: '2024-01-24T10:00:00Z',
-  },
-];
+import type { INotification } from '@/data/blog';
 
 const typeIcons: Record<string, typeof MessageSquare> = {
   comment: MessageSquare,
@@ -94,26 +37,73 @@ const typeColors: Record<string, string> = {
 };
 
 export default function NotificationsPage() {
-  const [notifications, setNotifications] = useState<Notification[]>(mockNotifications);
+  const navigate = useNavigate();
+  const { isLoggedIn } = useAuth();
+  const [notifications, setNotifications] = useState<INotification[]>([]);
   const [activeTab, setActiveTab] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [unreadCount, setUnreadCount] = useState(0);
 
-  const filtered = notifications.filter((n) => {
-    if (activeTab === 'unread') return n.is_read === 0;
-    if (activeTab === 'system') return n.type === 'system';
-    if (activeTab === 'interactions') return n.type !== 'system';
-    return true;
-  });
+  useEffect(() => {
+    if (!isLoggedIn) {
+      navigate('/login?redirect=/notifications');
+    }
+  }, [isLoggedIn, navigate]);
 
-  const unreadCount = notifications.filter((n) => n.is_read === 0).length;
+  const fetchNotifications = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params: Record<string, unknown> = { page, page_size: 20 };
+      if (activeTab === 'unread') params.unread = true;
 
-  const markAllRead = () => {
-    setNotifications(notifications.map((n) => ({ ...n, is_read: 1 })));
-    toast.success('已全部标记为已读');
+      const res = await notificationApi.list(params);
+      if (res.success) {
+        setNotifications((res.data as unknown as INotification[]) || []);
+        setTotalPages(res.total_pages || 1);
+        setUnreadCount(res.unread_count || 0);
+      } else {
+        setError(res.message || '加载失败');
+      }
+    } catch {
+      setError('网络请求失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [page, activeTab]);
+
+  useEffect(() => {
+    if (isLoggedIn) fetchNotifications();
+  }, [fetchNotifications, isLoggedIn]);
+
+  const markAllRead = async () => {
+    try {
+      const res = await notificationApi.markAllRead();
+      if (res.success) {
+        setNotifications(notifications.map((n) => ({ ...n, is_read: 1 })));
+        setUnreadCount(0);
+        toast.success('已全部标记为已读');
+      } else {
+        toast.error(res.message || '操作失败');
+      }
+    } catch {
+      toast.error('操作失败');
+    }
   };
 
-  const clearAll = () => {
-    setNotifications([]);
-    toast.success('已清空通知');
+  const markRead = async (id: number) => {
+    try {
+      await notificationApi.markRead(id);
+      setNotifications(
+        notifications.map((n) => (n.id === id ? { ...n, is_read: 1 } : n))
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+    } catch {
+      // ignore
+    }
   };
 
   const formatTime = (dateStr: string) => {
@@ -129,7 +119,16 @@ export default function NotificationsPage() {
     return date.toLocaleDateString('zh-CN');
   };
 
+  const filtered = notifications.filter((n) => {
+    if (activeTab === 'unread') return n.is_read === 0;
+    if (activeTab === 'system') return n.type === 'system';
+    if (activeTab === 'interactions') return n.type !== 'system';
+    return true;
+  });
+
   const Icon = (type: string) => typeIcons[type] || Bell;
+
+  if (!isLoggedIn) return null;
 
   return (
     <div className="space-y-4 pb-4">
@@ -148,21 +147,12 @@ export default function NotificationsPage() {
               <CheckCheck className="mr-1 h-4 w-4" />
               全部已读
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 text-xs text-destructive"
-              onClick={clearAll}
-            >
-              <Trash2 className="mr-1 h-4 w-4" />
-              清空
-            </Button>
           </div>
         </div>
       </div>
 
       {/* Tab */}
-      <Tabs defaultValue="all" value={activeTab} onValueChange={setActiveTab}>
+      <Tabs defaultValue="all" value={activeTab} onValueChange={(v) => { setActiveTab(v); setPage(1); }}>
         <TabsList className="w-full">
           <TabsTrigger value="all" className="flex-1 text-xs">
             全部
@@ -176,68 +166,120 @@ export default function NotificationsPage() {
         </TabsList>
       </Tabs>
 
+      {/* 加载状态 */}
+      {loading && (
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-4">
+                <div className="flex gap-3">
+                  <Skeleton className="h-9 w-9 rounded-full" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-3 w-1/2" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* 错误状态 */}
+      {error && !loading && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="flex flex-col items-center py-8">
+            <p className="text-sm text-destructive">{error}</p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={fetchNotifications}>
+              重试
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {/* 通知列表 */}
-      <div className="space-y-2">
-        {filtered.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <Bell className="mb-3 h-10 w-10 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">暂无通知</p>
-            </CardContent>
-          </Card>
-        ) : (
-          filtered.map((notification) => {
-            const IconComp = Icon(notification.type);
-            return (
-              <Card
-                key={notification.id}
-                className={notification.is_read === 0 ? 'border-primary/30' : ''}
-              >
-                <CardContent className="p-4">
-                  <div className="flex gap-3">
-                    {notification.from_user ? (
-                      <Avatar className="h-9 w-9 shrink-0">
-                        <AvatarFallback className="text-xs">
-                          {notification.from_user.nickname[0]}
-                        </AvatarFallback>
-                      </Avatar>
-                    ) : (
+      {!loading && !error && (
+        <div className="space-y-2">
+          {filtered.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <Bell className="mb-3 h-10 w-10 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  {activeTab === 'unread' ? '没有未读通知' : '暂无通知'}
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            filtered.map((notification) => {
+              const IconComp = Icon(notification.type);
+              return (
+                <Card
+                  key={notification.id}
+                  className={notification.is_read === 0 ? 'border-primary/30' : ''}
+                  onClick={() => {
+                    if (notification.is_read === 0) markRead(notification.id);
+                  }}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex gap-3">
                       <div
-                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${typeColors[notification.type]}`}
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${typeColors[notification.type] || 'bg-muted'}`}
                       >
                         <IconComp className="h-4 w-4" />
                       </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm">
-                          {notification.from_user && (
-                            <span className="font-medium">
-                              {notification.from_user.nickname}{' '}
-                            </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm">
+                            <span className="text-muted-foreground">{notification.title}</span>
+                          </p>
+                          {notification.is_read === 0 && (
+                            <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
                           )}
-                          <span className="text-muted-foreground">{notification.content}</span>
-                        </p>
-                        {notification.is_read === 0 && (
-                          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
+                        </div>
+                        {notification.content && (
+                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                            {notification.content}
+                          </p>
                         )}
-                      </div>
-                      {notification.post_title && (
-                        <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
-                          《{notification.post_title}》
+                        <p className="mt-1.5 text-[11px] text-muted-foreground">
+                          {formatTime(notification.created_at)}
                         </p>
-                      )}
-                      <p className="mt-1.5 text-[11px] text-muted-foreground">
-                        {formatTime(notification.created_at)}
-                      </p>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })
-        )}
-      </div>
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+
+          {/* 分页 */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                上一页
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {page} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
+                下一页
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

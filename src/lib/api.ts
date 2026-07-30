@@ -221,6 +221,32 @@ export const storageApi = {
       '/storage/files',
       { method: 'POST', body: JSON.stringify(data) }
     ),
+
+  uploadImage: async (file: File): Promise<ApiResponse<{ url: string; storage_key: string; size: number; mime: string }>> => {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch(`${API_BASE}/storage/upload`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+      return (await response.json()) as ApiResponse<{ url: string; storage_key: string; size: number; mime: string }>;
+    } catch (error) {
+      return { success: false, error: String(error), message: '上传失败' };
+    }
+  },
+
+  uploadImageBase64: (data: { data: string; filename?: string; mime?: string }) =>
+    request<{ url: string; storage_key: string; size: number; mime: string }>('/storage/upload', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 };
 
 // ============ 首次配置 API ============

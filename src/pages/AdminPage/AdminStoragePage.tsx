@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Plus, Edit, Trash2, HardDrive, Check, AlertCircle, Database } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Plus, Edit, Trash2, HardDrive, Check, Database, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import {
@@ -22,6 +22,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { storageApi } from '@/lib/api';
 import { toast } from 'sonner';
 
 interface StorageConfig {
@@ -39,26 +40,13 @@ interface StorageConfig {
   };
 }
 
-const mockConfigs: StorageConfig[] = [
-  {
-    id: 1,
-    name: '默认 WebDAV 存储',
-    type: 'webdav',
-    is_default: 1,
-    status: 'active',
-    config: {
-      url: 'https://dav.example.com/remote.php/dav/files/user/blog',
-      username: 'user@example.com',
-      password: '********',
-    },
-  },
-];
-
 export default function AdminStoragePage() {
-  const [configs, setConfigs] = useState<StorageConfig[]>(mockConfigs);
+  const [configs, setConfigs] = useState<StorageConfig[]>([]);
+  const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<StorageConfig | null>(null);
   const [testingId, setTestingId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     type: 'webdav',
@@ -67,6 +55,26 @@ export default function AdminStoragePage() {
     password: '',
     is_default: false,
   });
+
+  const fetchConfigs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await storageApi.listConfigs();
+      if (res.success && res.data) {
+        // 需要获取完整配置（含 config 字段）
+        const list = res.data as unknown as StorageConfig[];
+        setConfigs(list);
+      }
+    } catch {
+      toast.error('加载存储配置失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchConfigs();
+  }, [fetchConfigs]);
 
   const openCreateDialog = () => {
     setEditingConfig(null);
@@ -86,81 +94,113 @@ export default function AdminStoragePage() {
     setFormData({
       name: config.name,
       type: config.type,
-      url: config.config.url || '',
-      username: config.config.username || '',
-      password: config.config.password || '',
+      url: config.config?.url || '',
+      username: config.config?.username || '',
+      password: config.config?.password || '',
       is_default: config.is_default === 1,
     });
     setDialogOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name) {
       toast.error('请输入配置名称');
       return;
     }
+    if (formData.type === 'webdav' && !formData.url) {
+      toast.error('请输入 WebDAV URL');
+      return;
+    }
 
-    if (editingConfig) {
-      setConfigs(
-        configs.map((c) =>
-          c.id === editingConfig.id
-            ? {
-                ...c,
-                name: formData.name,
-                type: formData.type,
-                is_default: formData.is_default ? 1 : 0,
-                config: {
-                  url: formData.url,
-                  username: formData.username,
-                  password: formData.password,
-                },
-              }
-            : formData.is_default
-            ? { ...c, is_default: 0 }
-            : c
-        )
-      );
-      toast.success('配置已更新');
-    } else {
-      const newConfig: StorageConfig = {
-        id: Date.now(),
+    setSaving(true);
+    try {
+      const payload = {
         name: formData.name,
         type: formData.type,
-        is_default: formData.is_default ? 1 : 0,
-        status: 'active',
         config: {
           url: formData.url,
           username: formData.username,
           password: formData.password,
         },
+        is_default: formData.is_default,
       };
-      if (formData.is_default) {
-        setConfigs([...configs.map((c) => ({ ...c, is_default: 0 })), newConfig]);
+
+      if (editingConfig) {
+        const res = await storageApi.updateConfig(editingConfig.id, payload);
+        if (res.success) {
+          toast.success('配置已更新');
+          fetchConfigs();
+        } else {
+          toast.error(res.message || '更新失败');
+        }
       } else {
-        setConfigs([...configs, newConfig]);
+        const res = await storageApi.createConfig(payload);
+        if (res.success) {
+          toast.success('配置已创建');
+          fetchConfigs();
+        } else {
+          toast.error(res.message || '创建失败');
+        }
       }
-      toast.success('配置已创建');
+      setDialogOpen(false);
+    } catch {
+      toast.error('操作失败');
+    } finally {
+      setSaving(false);
     }
-    setDialogOpen(false);
   };
 
-  const handleDelete = (id: number) => {
-    setConfigs(configs.filter((c) => c.id !== id));
-    toast.success('配置已删除');
+  const handleDelete = async (id: number) => {
+    try {
+      const res = await storageApi.deleteConfig(id);
+      if (res.success) {
+        toast.success('配置已删除');
+        fetchConfigs();
+      } else {
+        toast.error(res.message || '删除失败');
+      }
+    } catch {
+      toast.error('删除失败');
+    }
   };
 
   const handleTest = async (id: number) => {
     setTestingId(id);
-    // 模拟测试
-    await new Promise((r) => setTimeout(r, 1500));
-    setTestingId(null);
-    toast.success('连接成功');
+    try {
+      const res = await storageApi.testConnection(id);
+      if (res.success && (res.data as unknown as { connected: boolean })?.connected) {
+        toast.success('连接成功');
+      } else {
+        toast.error(res.message || '连接失败');
+      }
+    } catch {
+      toast.error('连接测试失败');
+    } finally {
+      setTestingId(null);
+    }
   };
 
-  const setDefault = (id: number) => {
-    setConfigs(configs.map((c) => ({ ...c, is_default: c.id === id ? 1 : 0 })));
-    toast.success('已设为默认存储');
+  const setDefault = async (id: number) => {
+    try {
+      const res = await storageApi.updateConfig(id, { is_default: true });
+      if (res.success) {
+        toast.success('已设为默认存储');
+        fetchConfigs();
+      } else {
+        toast.error(res.message || '操作失败');
+      }
+    } catch {
+      toast.error('操作失败');
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -179,7 +219,7 @@ export default function AdminStoragePage() {
         <h2 className="text-base font-semibold">存储配置</h2>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button size="sm" className="h-8 gap-1">
+            <Button size="sm" className="h-8 gap-1" onClick={openCreateDialog}>
               <Plus className="h-4 w-4" />
               添加配置
             </Button>
@@ -254,7 +294,8 @@ export default function AdminStoragePage() {
               <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)}>
                 取消
               </Button>
-              <Button size="sm" onClick={handleSave}>
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
                 保存
               </Button>
             </DialogFooter>
@@ -292,7 +333,7 @@ export default function AdminStoragePage() {
                         )}
                       </CardTitle>
                       <CardDescription className="mt-0.5 text-xs">
-                        {config.type.toUpperCase()} · {config.config.url}
+                        {config.type.toUpperCase()} · {config.config?.url || '未配置'}
                       </CardDescription>
                     </div>
                   </div>
@@ -304,6 +345,9 @@ export default function AdminStoragePage() {
                       onClick={() => handleTest(config.id)}
                       disabled={testingId === config.id}
                     >
+                      {testingId === config.id ? (
+                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                      ) : null}
                       {testingId === config.id ? '测试中...' : '测试连接'}
                     </Button>
                     {config.is_default !== 1 && (

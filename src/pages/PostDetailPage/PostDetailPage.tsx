@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -11,6 +11,7 @@ import {
   Send,
   Trash2,
   Edit,
+  Loader2,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,16 +19,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MOCK_POSTS, MOCK_COMMENTS, type IPost, type IComment } from '@/data/blog';
+import { Skeleton } from '@/components/ui/skeleton';
+import { postApi, commentApi } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
+import type { IPost, IComment } from '@/data/blog';
 
 export default function PostDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -39,25 +42,72 @@ export default function PostDetailPage() {
   const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [commentPage, setCommentPage] = useState(1);
+  const [commentTotal, setCommentTotal] = useState(0);
 
-  useEffect(() => {
-    const postId = parseInt(id || '0', 10);
-    const found = MOCK_POSTS.find((p) => p.id === postId);
-    if (found) {
-      setPost(found);
-      setLikeCount(found.like_count);
+  const fetchPost = useCallback(async () => {
+    if (!id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await postApi.get(parseInt(id, 10));
+      if (res.success && res.data) {
+        const data = res.data as unknown as IPost;
+        setPost(data);
+        setLikeCount(data.like_count);
+      } else {
+        setError(res.message || '文章不存在');
+      }
+    } catch {
+      setError('加载失败，请稍后重试');
+    } finally {
+      setLoading(false);
     }
-    const postComments = MOCK_COMMENTS.filter((c) => c.post_id === postId);
-    setComments(postComments);
   }, [id]);
 
-  const handleLike = () => {
+  const fetchComments = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await commentApi.list({
+        post_id: parseInt(id, 10),
+        page: commentPage,
+        page_size: 50,
+      });
+      if (res.success) {
+        setComments((res.data as unknown as IComment[]) || []);
+        setCommentTotal(res.total || 0);
+      }
+    } catch {
+      // 评论加载失败不影响文章展示
+    }
+  }, [id, commentPage]);
+
+  useEffect(() => {
+    fetchPost();
+  }, [fetchPost]);
+
+  useEffect(() => {
+    fetchComments();
+  }, [fetchComments]);
+
+  const handleLike = async () => {
     if (!isLoggedIn) {
       navigate('/login');
       return;
     }
-    setLiked(!liked);
-    setLikeCount((prev) => (liked ? prev - 1 : prev + 1));
+    if (!post) return;
+    try {
+      const res = await postApi.toggleLike('post', post.id);
+      if (res.success && res.data) {
+        const isLiked = (res.data as unknown as { liked: boolean }).liked;
+        setLiked(isLiked);
+        setLikeCount((prev) => (isLiked ? prev + 1 : prev - 1));
+      }
+    } catch {
+      toast.error('操作失败');
+    }
   };
 
   const handleSubmitComment = async () => {
@@ -66,39 +116,93 @@ export default function PostDetailPage() {
       navigate('/login');
       return;
     }
+    if (!post) return;
 
     setIsSubmitting(true);
-    // 模拟提交
-    await new Promise((r) => setTimeout(r, 500));
-
-    const newComment: IComment = {
-      id: Date.now(),
-      post_id: post?.id || 0,
-      author_id: user?.id || 0,
-      parent_id: null,
-      content_md: commentText,
-      status: 'approved',
-      like_count: 0,
-      author: user || undefined,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    setComments([...comments, newComment]);
-    setCommentText('');
-    setIsSubmitting(false);
-    toast.success('评论成功');
+    try {
+      const res = await commentApi.create({
+        post_id: post.id,
+        content_md: commentText,
+      });
+      if (res.success) {
+        setCommentText('');
+        toast.success((res.data as unknown as { message: string })?.message || '评论成功');
+        fetchComments();
+      } else {
+        toast.error(res.message || '评论失败');
+      }
+    } catch {
+      toast.error('评论失败，请稍后重试');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDelete = () => {
-    toast.success('删除成功');
-    navigate(-1);
+  const handleDelete = async () => {
+    if (!post) return;
+    try {
+      const res = await postApi.delete(post.id);
+      if (res.success) {
+        toast.success('删除成功');
+        navigate(-1);
+      } else {
+        toast.error(res.message || '删除失败');
+      }
+    } catch {
+      toast.error('删除失败');
+    }
   };
 
-  if (!post) {
+  const handleShare = () => {
+    const url = window.location.href;
+    navigator.clipboard.writeText(url).then(() => {
+      toast.success('链接已复制');
+    }).catch(() => {
+      toast.info('请手动复制地址栏链接');
+    });
+  };
+
+  // 加载状态
+  if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="text-sm text-muted-foreground">加载中...</div>
+      <div className="pb-20">
+        <header className="sticky top-0 z-40 flex items-center justify-between border-b border-border/50 bg-background/80 px-4 py-3 backdrop-blur-md">
+          <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => navigate(-1)}>
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <h1 className="text-sm font-medium">加载中...</h1>
+          <div className="w-9" />
+        </header>
+        <div className="space-y-4 px-4 py-6">
+          <Skeleton className="h-6 w-24" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-3/4" />
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-full" />
+            <div className="space-y-1">
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-3 w-16" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 错误状态
+  if (error || !post) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
+        <div className="mb-3 text-4xl">😢</div>
+        <p className="text-sm text-muted-foreground">{error || '文章不存在'}</p>
+        <Button variant="outline" size="sm" className="mt-3" onClick={() => navigate('/')}>
+          返回首页
+        </Button>
       </div>
     );
   }
@@ -130,7 +234,7 @@ export default function PostDetailPage() {
                 </DropdownMenuItem>
               </>
             )}
-            <DropdownMenuItem onClick={() => toast.success('已复制链接')}>
+            <DropdownMenuItem onClick={handleShare}>
               <Share2 className="mr-2 h-4 w-4" />
               分享
             </DropdownMenuItem>
@@ -146,7 +250,7 @@ export default function PostDetailPage() {
               {post.board_name}
             </Badge>
           )}
-          {post.tags.map((tag, i) => (
+          {post.tags?.map((tag, i) => (
             <Badge key={i} variant="secondary" className="h-6 px-2 text-xs font-normal">
               #{tag}
             </Badge>
@@ -157,11 +261,11 @@ export default function PostDetailPage() {
 
         {/* 作者信息 */}
         <div className="mb-6 flex items-center justify-between">
-          <Link
-            to={`/user/${post.author_id}`}
-            className="flex items-center gap-3"
-          >
+          <Link to={`/user/${post.author_id}`} className="flex items-center gap-3">
             <Avatar className="h-10 w-10">
+              {(post as unknown as { author?: { avatar?: string } }).author?.avatar ? (
+                <AvatarImage src={(post as unknown as { author: { avatar: string } }).author.avatar} />
+              ) : null}
               <AvatarFallback>
                 <User className="h-5 w-5" />
               </AvatarFallback>
@@ -192,13 +296,16 @@ export default function PostDetailPage() {
             <Eye className="h-4 w-4" />
             {post.view_count} 阅读
           </span>
-          <span className="flex items-center gap-1.5">
-            <Heart className="h-4 w-4" />
+          <button
+            className={`flex items-center gap-1.5 transition-colors ${liked ? 'text-red-500' : 'hover:text-foreground'}`}
+            onClick={handleLike}
+          >
+            <Heart className={`h-4 w-4 ${liked ? 'fill-current' : ''}`} />
             {likeCount} 点赞
-          </span>
+          </button>
           <span className="flex items-center gap-1.5">
             <MessageCircle className="h-4 w-4" />
-            {comments.length} 评论
+            {commentTotal} 评论
           </span>
         </div>
       </article>
@@ -206,7 +313,7 @@ export default function PostDetailPage() {
       {/* 评论区 */}
       <section className="border-t border-border/50 px-4 py-6">
         <h2 className="mb-4 text-lg font-semibold">
-          评论 <span className="text-sm font-normal text-muted-foreground">({comments.length})</span>
+          评论 <span className="text-sm font-normal text-muted-foreground">({commentTotal})</span>
         </h2>
 
         {/* 评论输入 */}
@@ -214,6 +321,7 @@ export default function PostDetailPage() {
           <CardContent className="p-3">
             <div className="flex gap-3">
               <Avatar className="h-8 w-8 shrink-0">
+                {user?.avatar ? <AvatarImage src={user.avatar} /> : null}
                 <AvatarFallback>
                   <User className="h-4 w-4" />
                 </AvatarFallback>
@@ -238,7 +346,11 @@ export default function PostDetailPage() {
                     disabled={!commentText.trim() || isSubmitting}
                     className="h-8 gap-1.5 text-xs"
                   >
-                    <Send className="h-3.5 w-3.5" />
+                    {isSubmitting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
                     发表
                   </Button>
                 </div>
@@ -257,6 +369,7 @@ export default function PostDetailPage() {
             {comments.map((comment) => (
               <div key={comment.id} className="flex gap-3">
                 <Avatar className="h-8 w-8 shrink-0">
+                  {comment.author?.avatar ? <AvatarImage src={comment.author.avatar} /> : null}
                   <AvatarFallback>
                     <User className="h-4 w-4" />
                   </AvatarFallback>
@@ -305,6 +418,9 @@ export default function PostDetailPage() {
               }}
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSubmitComment();
+              }}
             />
           </div>
           <Button
@@ -315,7 +431,7 @@ export default function PostDetailPage() {
           >
             <Heart className={`h-5 w-5 ${liked ? 'fill-current' : ''}`} />
           </Button>
-          <Button variant="ghost" size="icon" className="h-9 w-9">
+          <Button variant="ghost" size="icon" className="h-9 w-9" onClick={handleShare}>
             <Share2 className="h-5 w-5" />
           </Button>
         </div>

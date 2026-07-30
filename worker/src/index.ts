@@ -45,6 +45,8 @@ import {
   testStorageConnectionHandler,
   listStorageFilesHandler,
   saveToStorageHandler,
+  uploadImageHandler,
+  serveImageHandler,
 } from './routes/storage';
 import {
   listNotificationsHandler,
@@ -262,6 +264,16 @@ async function handleApiRoutes(
   if (m.matched) {
     if (method === 'GET') return listStorageFilesHandler(request, env);
     if (method === 'POST') return saveToStorageHandler(request, env);
+  }
+
+  // 图片上传
+  m = matchRoute(apiPath, '/storage/upload');
+  if (m.matched && method === 'POST') return uploadImageHandler(request, env);
+
+  // 图片代理读取 (支持嵌套路径)
+  if (apiPath.startsWith('/storage/images/')) {
+    const storageKey = apiPath.replace('/storage/images/', '');
+    if (storageKey) return serveImageHandler(request, env, storageKey);
   }
 
   // ============ 通知 ============

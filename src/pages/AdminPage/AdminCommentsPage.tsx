@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Search, Check, X, MessageSquare, Trash2, MoreHorizontal } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Search, Check, X, Trash2, MoreHorizontal, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,36 +17,90 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
-import { MOCK_COMMENTS, type IComment } from '@/data/blog';
+import { adminApi, commentApi } from '@/lib/api';
+import type { IComment } from '@/data/blog';
 import { toast } from 'sonner';
 
 export default function AdminCommentsPage() {
-  const [comments, setComments] = useState<IComment[]>(MOCK_COMMENTS);
+  const [comments, setComments] = useState<IComment[]>([]);
+  const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [status, setStatus] = useState('all');
   const [activeTab, setActiveTab] = useState<'all' | 'pending'>('all');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [pendingCount, setPendingCount] = useState(0);
 
-  const filteredComments = comments.filter((c) => {
-    const matchKeyword =
-      !keyword || c.content_md.toLowerCase().includes(keyword.toLowerCase());
-    const matchStatus = status === 'all' || c.status === status;
-    const matchTab = activeTab === 'all' || c.status === activeTab;
-    return matchKeyword && matchStatus && matchTab;
-  });
+  const fetchComments = useCallback(async () => {
+    setLoading(true);
+    try {
+      if (activeTab === 'pending') {
+        const res = await adminApi.pendingComments({ page, page_size: 20 });
+        if (res.success) {
+          setComments((res.data as unknown as IComment[]) || []);
+          setTotalPages(res.total_pages || 1);
+        }
+      } else {
+        // 获取所有评论（通过 admin API 或按状态筛选）
+        const res = await adminApi.pendingComments({ page, page_size: 50 });
+        if (res.success) {
+          let allComments = (res.data as unknown as IComment[]) || [];
+          if (status !== 'all') {
+            allComments = allComments.filter((c) => c.status === status);
+          }
+          if (keyword) {
+            allComments = allComments.filter((c) =>
+              c.content_md.toLowerCase().includes(keyword.toLowerCase())
+            );
+          }
+          setComments(allComments);
+          setTotalPages(res.total_pages || 1);
+        }
+      }
 
-  const handleModerate = (id: number, newStatus: string) => {
-    setComments(
-      comments.map((c) => (c.id === id ? { ...c, status: newStatus } : c))
-    );
-    toast.success('操作成功');
+      // 获取待审核数量
+      const statsRes = await adminApi.stats();
+      if (statsRes.success && statsRes.data) {
+        setPendingCount((statsRes.data as Record<string, unknown>).pending_comments as number || 0);
+      }
+    } catch {
+      toast.error('加载评论失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [page, activeTab, status, keyword]);
+
+  useEffect(() => {
+    fetchComments();
+  }, [fetchComments]);
+
+  const handleModerate = async (id: number, newStatus: string) => {
+    try {
+      const res = await commentApi.moderate(id, newStatus);
+      if (res.success) {
+        toast.success('操作成功');
+        fetchComments();
+      } else {
+        toast.error(res.message || '操作失败');
+      }
+    } catch {
+      toast.error('操作失败');
+    }
   };
 
-  const handleDelete = (id: number) => {
-    setComments(comments.filter((c) => c.id !== id));
-    toast.success('删除成功');
+  const handleDelete = async (id: number) => {
+    try {
+      const res = await commentApi.delete(id);
+      if (res.success) {
+        toast.success('删除成功');
+        fetchComments();
+      } else {
+        toast.error(res.message || '删除失败');
+      }
+    } catch {
+      toast.error('删除失败');
+    }
   };
-
-  const pendingCount = comments.filter((c) => c.status === 'pending').length;
 
   const statusColor: Record<string, string> = {
     approved: 'bg-green-500/20 text-green-500',
@@ -62,6 +116,14 @@ export default function AdminCommentsPage() {
     deleted: '已删除',
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* 操作栏 */}
@@ -73,11 +135,11 @@ export default function AdminCommentsPage() {
               type="search"
               placeholder="搜索评论..."
               value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
+              onChange={(e) => { setKeyword(e.target.value); setPage(1); }}
               className="h-9 pl-9 text-sm"
             />
           </div>
-          <Select value={status} onValueChange={setStatus}>
+          <Select value={status} onValueChange={(v) => { setStatus(v); setPage(1); }}>
             <SelectTrigger className="h-9 w-28 text-xs">
               <SelectValue />
             </SelectTrigger>
@@ -97,7 +159,7 @@ export default function AdminCommentsPage() {
           variant={activeTab === 'all' ? 'default' : 'outline'}
           size="sm"
           className="h-8 text-xs"
-          onClick={() => setActiveTab('all')}
+          onClick={() => { setActiveTab('all'); setPage(1); }}
         >
           全部
         </Button>
@@ -105,7 +167,7 @@ export default function AdminCommentsPage() {
           variant={activeTab === 'pending' ? 'default' : 'outline'}
           size="sm"
           className="h-8 gap-1 text-xs"
-          onClick={() => setActiveTab('pending')}
+          onClick={() => { setActiveTab('pending'); setPage(1); }}
         >
           待审核
           {pendingCount > 0 && (
@@ -118,7 +180,7 @@ export default function AdminCommentsPage() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">
-            评论列表 <span className="text-sm font-normal text-muted-foreground">({filteredComments.length})</span>
+            评论列表 <span className="text-sm font-normal text-muted-foreground">({comments.length})</span>
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
@@ -135,89 +197,116 @@ export default function AdminCommentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredComments.map((comment) => (
-                  <tr key={comment.id} className="border-b border-border/50 hover:bg-muted/30">
-                    <td className="px-4 py-3">
-                      <div className="max-w-[300px]">
-                        <div className="line-clamp-2">{comment.content_md}</div>
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                      {comment.author?.nickname || comment.author?.username || '匿名'}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
-                      文章 #{comment.post_id}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      <Badge className={`text-[10px] font-normal ${statusColor[comment.status] || ''}`}>
-                        {statusLabel[comment.status] || comment.status}
-                      </Badge>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
-                      {new Date(comment.created_at).toLocaleDateString('zh-CN')}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        {comment.status === 'pending' && (
-                          <>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-green-500"
-                              onClick={() => handleModerate(comment.id, 'approved')}
-                              title="通过"
-                            >
-                              <Check className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-red-500"
-                              onClick={() => handleModerate(comment.id, 'spam')}
-                              title="标记垃圾"
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </>
-                        )}
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            {comment.status !== 'approved' && (
-                              <DropdownMenuItem onClick={() => handleModerate(comment.id, 'approved')}>
-                                <Check className="mr-2 h-4 w-4" />
-                                设为通过
-                              </DropdownMenuItem>
-                            )}
-                            {comment.status !== 'spam' && (
-                              <DropdownMenuItem onClick={() => handleModerate(comment.id, 'spam')}>
-                                <X className="mr-2 h-4 w-4" />
-                                标记垃圾
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem
-                              onClick={() => handleDelete(comment.id)}
-                              className="text-destructive"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              删除
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+                {comments.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                      暂无评论
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  comments.map((comment) => (
+                    <tr key={comment.id} className="border-b border-border/50 hover:bg-muted/30">
+                      <td className="px-4 py-3">
+                        <div className="max-w-[300px]">
+                          <div className="line-clamp-2">{comment.content_md}</div>
+                        </div>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
+                        {comment.author?.nickname || comment.author?.username || '匿名'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
+                        文章 #{comment.post_id}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <Badge className={`text-[10px] font-normal ${statusColor[comment.status] || ''}`}>
+                          {statusLabel[comment.status] || comment.status}
+                        </Badge>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
+                        {new Date(comment.created_at).toLocaleDateString('zh-CN')}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {comment.status === 'pending' && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-green-500"
+                                onClick={() => handleModerate(comment.id, 'approved')}
+                                title="通过"
+                              >
+                                <Check className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-red-500"
+                                onClick={() => handleModerate(comment.id, 'spam')}
+                                title="标记垃圾"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              {comment.status !== 'approved' && (
+                                <DropdownMenuItem onClick={() => handleModerate(comment.id, 'approved')}>
+                                  <Check className="mr-2 h-4 w-4" />
+                                  设为通过
+                                </DropdownMenuItem>
+                              )}
+                              {comment.status !== 'spam' && (
+                                <DropdownMenuItem onClick={() => handleModerate(comment.id, 'spam')}>
+                                  <X className="mr-2 h-4 w-4" />
+                                  标记垃圾
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem
+                                onClick={() => handleDelete(comment.id)}
+                                className="text-destructive"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                删除
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
-          {filteredComments.length === 0 && (
-            <div className="py-12 text-center text-sm text-muted-foreground">
-              暂无评论
+          {/* 分页 */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 border-t border-border px-4 py-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                上一页
+              </Button>
+              <span className="text-xs text-muted-foreground">{page} / {totalPages}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
+                下一页
+              </Button>
             </div>
           )}
         </CardContent>

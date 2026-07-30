@@ -8,9 +8,20 @@ import {
   getQueryParam,
   generateSlug,
   renderMarkdown,
+  generateStorageKey,
 } from '../lib/utils';
 import { authMiddleware, requireAuth, requireEditor } from '../middleware/auth';
+import { readFromWebDAV, writeToWebDAV } from './storage';
 import type { Env, Post } from '../types';
+
+// 获取 WebDAV 配置
+async function getWebDAVConfig(env: Env) {
+  const config = await env.DB.prepare(
+    "SELECT * FROM storage_configs WHERE is_default = 1 AND status = 'active' LIMIT 1"
+  ).first<{ id: number; type: string; config: string }>();
+  if (!config || config.type !== 'webdav') return null;
+  return JSON.parse(config.config) as { url: string; username: string; password: string };
+}
 
 interface CreatePostBody {
   title: string;
@@ -131,12 +142,28 @@ export async function getPostHandler(request: Request, env: Env, id: string): Pr
     .bind(p.id)
     .run();
 
+  // 尝试从 WebDAV 读取最新的 content_md
+  let contentMd = p.content_md;
+  if (p.storage_key) {
+    try {
+      const webdavConfig = await getWebDAVConfig(env);
+      if (webdavConfig) {
+        const remoteContent = await readFromWebDAV(webdavConfig, p.storage_key);
+        if (remoteContent) {
+          contentMd = remoteContent;
+        }
+      }
+    } catch {
+      // 降级使用数据库中的内容
+    }
+  }
+
   return successResponse({
     id: p.id,
     title: p.title,
     slug: p.slug,
     summary: p.summary,
-    content_md: p.content_md,
+    content_md: contentMd,
     content_html: p.content_html,
     cover_image: p.cover_image,
     board_id: p.board_id,
@@ -157,6 +184,7 @@ export async function getPostHandler(request: Request, env: Env, id: string): Pr
     like_count: p.like_count,
     comment_count: p.comment_count,
     tags: p.tags ? JSON.parse(p.tags) : [],
+    storage_key: p.storage_key,
     created_at: p.created_at,
     updated_at: p.updated_at,
   });
@@ -186,11 +214,26 @@ export async function createPostHandler(request: Request, env: Env): Promise<Res
 
   const now = new Date().toISOString();
 
+  // 尝试保存到 WebDAV
+  let storageKey: string | null = null;
+  try {
+    const webdavConfig = await getWebDAVConfig(env);
+    if (webdavConfig) {
+      storageKey = generateStorageKey(auth.userId!, 'post', Date.now());
+      const saved = await writeToWebDAV(webdavConfig, storageKey, body.content_md);
+      if (!saved) {
+        storageKey = null; // 降级：不设置 storage_key，内容存在数据库
+      }
+    }
+  } catch {
+    // 降级：内容存在数据库
+  }
+
   const result = await env.DB.prepare(
     `INSERT INTO posts 
      (title, slug, summary, content_md, content_html, cover_image, board_id, author_id, 
-      status, visibility, tags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      status, visibility, tags, storage_key, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       body.title,
@@ -204,6 +247,7 @@ export async function createPostHandler(request: Request, env: Env): Promise<Res
       status,
       visibility,
       tags,
+      storageKey,
       now,
       now
     )
@@ -218,7 +262,7 @@ export async function createPostHandler(request: Request, env: Env): Promise<Res
       .run();
   }
 
-  return successResponse({ id: postId, slug }, '发布成功');
+  return successResponse({ id: postId, slug, storage_key: storageKey }, '发布成功');
 }
 
 // 更新文章
@@ -262,6 +306,21 @@ export async function updatePostHandler(
     fields.push('content_html = ?');
     values.push(renderMarkdown(body.content_md));
     fields.push('storage_version = storage_version + 1');
+
+    // 尝试同步到 WebDAV
+    try {
+      const webdavConfig = await getWebDAVConfig(env);
+      if (webdavConfig) {
+        const newKey = generateStorageKey(auth.userId!, 'post', Date.now());
+        const saved = await writeToWebDAV(webdavConfig, newKey, body.content_md);
+        if (saved) {
+          fields.push('storage_key = ?');
+          values.push(newKey);
+        }
+      }
+    } catch {
+      // 降级
+    }
   }
   if (body.summary !== undefined) {
     fields.push('summary = ?');

@@ -25,17 +25,60 @@ async function webdavRequest(
   url: string,
   method: string,
   config: { url: string; username: string; password: string },
-  body?: BodyInit
+  body?: BodyInit,
+  contentType = 'text/markdown'
 ): Promise<Response> {
   const authHeader = `Basic ${btoa(`${config.username}:${config.password}`)}`;
   return fetch(url, {
     method,
     headers: {
       Authorization: authHeader,
-      'Content-Type': 'text/markdown',
+      'Content-Type': contentType,
     },
     body,
   });
+}
+
+// 获取默认存储配置
+async function getDefaultStorageConfig(env: Env) {
+  const config = await env.DB.prepare(
+    "SELECT * FROM storage_configs WHERE is_default = 1 AND status = 'active' LIMIT 1"
+  ).first<StorageConfig>();
+  if (!config) return null;
+  return { config, data: JSON.parse(config.config) as { url: string; username: string; password: string } };
+}
+
+// 从 WebDAV 读取文件内容
+export async function readFromWebDAV(
+  config: { url: string; username: string; password: string },
+  storageKey: string
+): Promise<string | null> {
+  const fileUrl = `${config.url.replace(/\/$/, '')}/${storageKey}`;
+  try {
+    const resp = await webdavRequest(fileUrl, 'GET', config);
+    if (resp.ok) {
+      return await resp.text();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// 写入内容到 WebDAV
+export async function writeToWebDAV(
+  config: { url: string; username: string; password: string },
+  storageKey: string,
+  content: string,
+  contentType = 'text/markdown'
+): Promise<boolean> {
+  const fileUrl = `${config.url.replace(/\/$/, '')}/${storageKey}`;
+  try {
+    const resp = await webdavRequest(fileUrl, 'PUT', config, content, contentType);
+    return resp.ok;
+  } catch {
+    return false;
+  }
 }
 
 // 列出存储配置
@@ -216,18 +259,14 @@ export async function listStorageFilesHandler(
   const url = new URL(request.url);
   const functionName = url.searchParams.get('function') || 'post';
 
-  // 获取默认存储配置
-  const config = await env.DB.prepare(
-    "SELECT * FROM storage_configs WHERE is_default = 1 AND status = 'active' LIMIT 1"
-  ).first<StorageConfig>();
-
-  if (!config) {
+  const storage = await getDefaultStorageConfig(env);
+  if (!storage) {
     return successResponse({ files: [], enabled: false }, '存储功能未启用');
   }
 
-  const configData = JSON.parse(config.config);
+  const configData = storage.data;
 
-  if (config.type === 'webdav') {
+  if (storage.config.type === 'webdav') {
     try {
       const prefix = `${auth.userId}_${functionName}_`;
       // WebDAV PROPFIND 列出目录
@@ -250,7 +289,7 @@ export async function listStorageFilesHandler(
       }
 
       files.sort((a, b) => b.timestamp - a.timestamp);
-      return successResponse({ files, enabled: true, config_id: config.id });
+      return successResponse({ files, enabled: true, config_id: storage.config.id });
     } catch (e) {
       return errorResponse(`获取文件列表失败: ${String(e)}`);
     }
@@ -278,20 +317,17 @@ export async function saveToStorageHandler(
     return errorResponse('功能名称和内容不能为空');
   }
 
-  const config = await env.DB.prepare(
-    "SELECT * FROM storage_configs WHERE is_default = 1 AND status = 'active' LIMIT 1"
-  ).first<StorageConfig>();
-
-  if (!config) {
+  const storage = await getDefaultStorageConfig(env);
+  if (!storage) {
     return errorResponse('存储功能未启用');
   }
 
-  const configData = JSON.parse(config.config);
+  const configData = storage.data;
   const timestamp = Date.now();
   const fileName = generateStorageKey(auth.userId!, body.function_name, timestamp);
   const fileUrl = `${configData.url.replace(/\/$/, '')}/${fileName}`;
 
-  if (config.type === 'webdav') {
+  if (storage.config.type === 'webdav') {
     try {
       // 上传新文件
       const uploadResp = await webdavRequest(fileUrl, 'PUT', configData, body.content);
@@ -347,4 +383,128 @@ export async function saveToStorageHandler(
   }
 
   return errorResponse('不支持的存储类型');
+}
+
+// 图片上传
+export async function uploadImageHandler(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAuth(auth);
+  if (err) return err;
+
+  const storage = await getDefaultStorageConfig(env);
+  if (!storage) {
+    return errorResponse('存储功能未启用，请先配置 WebDAV 存储');
+  }
+
+  const contentType = request.headers.get('Content-Type') || '';
+  let imageBuffer: ArrayBuffer;
+  let fileName: string;
+  let mimeType: string;
+
+  if (contentType.includes('multipart/form-data')) {
+    // multipart 上传
+    const formData = await request.formData();
+    const file = formData.get('file') as File | null;
+    if (!file) {
+      return errorResponse('请选择要上传的文件');
+    }
+    imageBuffer = await file.arrayBuffer();
+    fileName = file.name;
+    mimeType = file.type || 'image/jpeg';
+  } else {
+    // JSON 上传 (base64)
+    const body = await parseBody<{ data: string; filename?: string; mime?: string }>(request);
+    if (!body?.data) {
+      return errorResponse('请提供图片数据');
+    }
+    const base64 = body.data.includes(',') ? body.data.split(',')[1] : body.data;
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    imageBuffer = bytes.buffer;
+    fileName = body.filename || `upload_${Date.now()}.jpg`;
+    mimeType = body.mime || 'image/jpeg';
+  }
+
+  // 验证文件大小 (5MB)
+  if (imageBuffer.byteLength > 5 * 1024 * 1024) {
+    return errorResponse('文件大小不能超过 5MB');
+  }
+
+  // 验证文件类型
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
+  if (!allowedTypes.includes(mimeType)) {
+    return errorResponse('仅支持 JPG/PNG/GIF/WebP/SVG 格式');
+  }
+
+  // 生成存储路径
+  const ext = fileName.split('.').pop() || 'jpg';
+  const date = new Date();
+  const datePath = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+  const storageKey = `images/${datePath}/${auth.userId}_${Date.now()}.${ext}`;
+  const configData = storage.data;
+  const fileUrl = `${configData.url.replace(/\/$/, '')}/${storageKey}`;
+
+  try {
+    const resp = await webdavRequest(fileUrl, 'PUT', configData, imageBuffer, mimeType);
+    if (!resp.ok) {
+      return errorResponse(`上传失败: HTTP ${resp.status}`);
+    }
+
+    // 返回可访问的 URL
+    const publicUrl = `/api/storage/images/${storageKey}`;
+    return successResponse({
+      url: publicUrl,
+      storage_key: storageKey,
+      size: imageBuffer.byteLength,
+      mime: mimeType,
+    }, '上传成功');
+  } catch (e) {
+    return errorResponse(`上传失败: ${String(e)}`);
+  }
+}
+
+// 图片代理读取
+export async function serveImageHandler(
+  request: Request,
+  env: Env,
+  storageKey: string
+): Promise<Response> {
+  const storage = await getDefaultStorageConfig(env);
+  if (!storage) {
+    return errorResponse('存储未配置', 404);
+  }
+
+  const configData = storage.data;
+  const fileUrl = `${configData.url.replace(/\/$/, '')}/${storageKey}`;
+
+  try {
+    const authHeader = `Basic ${btoa(`${configData.username}:${configData.password}`)}`;
+    const resp = await fetch(fileUrl, {
+      method: 'GET',
+      headers: { Authorization: authHeader },
+    });
+
+    if (!resp.ok) {
+      return errorResponse('图片不存在', 404);
+    }
+
+    const body = await resp.arrayBuffer();
+    const ct = resp.headers.get('Content-Type') || 'image/jpeg';
+
+    return new Response(body, {
+      headers: {
+        'Content-Type': ct,
+        'Cache-Control': 'public, max-age=86400',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  } catch {
+    return errorResponse('读取图片失败', 500);
+  }
 }

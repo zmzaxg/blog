@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Filter, Plus } from 'lucide-react';
+import { ArrowLeft, Filter, Plus, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
 import PostCard from '@/components/PostCard';
 import { postApi, boardApi } from '@/lib/api';
 import type { IPost, IBoard } from '@/data/blog';
@@ -21,36 +22,49 @@ export default function BoardPage() {
   const [board, setBoard] = useState<IBoard | null>(null);
   const [sort, setSort] = useState('latest');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+
+  const fetchData = useCallback(async () => {
+    if (!slug) return;
+    setLoading(true);
+    setError(null);
+    try {
+      // 获取板块信息
+      const boardsRes = await boardApi.list();
+      if (boardsRes.success && boardsRes.data) {
+        const found = (boardsRes.data as unknown as IBoard[]).find((b) => b.slug === slug);
+        if (found) {
+          setBoard(found);
+          // 获取板块文章
+          const postsRes = await postApi.list({
+            board_id: found.id,
+            page,
+            page_size: 20,
+          });
+          if (postsRes.success) {
+            setPosts((postsRes.data as unknown as IPost[]) || []);
+            setTotalPages(postsRes.total_pages || 1);
+          } else {
+            setError(postsRes.message || '加载文章失败');
+          }
+        } else {
+          setError('板块不存在');
+        }
+      } else {
+        setError(boardsRes.message || '加载板块信息失败');
+      }
+    } catch {
+      setError('网络请求失败，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  }, [slug, page]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      try {
-        // 获取板块信息
-        const boardsRes = await boardApi.list();
-        if (boardsRes.success && boardsRes.data) {
-          const found = (boardsRes.data as unknown as IBoard[]).find((b) => b.slug === slug);
-          if (found) setBoard(found);
-        }
-
-        // 获取板块文章
-        const postsRes = await postApi.list({ keyword: sort === 'hot' ? '' : '', board_id: board?.id });
-        if (postsRes.success && postsRes.data) {
-          setPosts(postsRes.data as unknown as IPost[]);
-        }
-      } catch {
-        // mock fallback
-        const { MOCK_POSTS, MOCK_BOARDS } = await import('@/data/blog');
-        const found = MOCK_BOARDS.find((b) => b.slug === slug);
-        if (found) setBoard(found);
-        setPosts(MOCK_POSTS.filter((p) => p.board_id === found?.id));
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (slug) fetchData();
-  }, [slug, sort]);
+    fetchData();
+  }, [fetchData]);
 
   return (
     <div className="space-y-4 pb-4">
@@ -78,24 +92,26 @@ export default function BoardPage() {
       </div>
 
       {/* 统计 */}
-      <Card>
-        <CardContent className="flex items-center justify-around p-4">
-          <div className="text-center">
-            <div className="text-lg font-bold">{board?.post_count || 0}</div>
-            <div className="text-xs text-muted-foreground">帖子</div>
-          </div>
-          <div className="h-8 w-px bg-border" />
-          <div className="text-center">
-            <div className="text-lg font-bold">1.2k</div>
-            <div className="text-xs text-muted-foreground">成员</div>
-          </div>
-          <div className="h-8 w-px bg-border" />
-          <div className="text-center">
-            <div className="text-lg font-bold">今日</div>
-            <div className="text-xs text-muted-foreground">{posts.length} 新帖</div>
-          </div>
-        </CardContent>
-      </Card>
+      {board && (
+        <Card>
+          <CardContent className="flex items-center justify-around p-4">
+            <div className="text-center">
+              <div className="text-lg font-bold">{board.post_count || 0}</div>
+              <div className="text-xs text-muted-foreground">帖子</div>
+            </div>
+            <div className="h-8 w-px bg-border" />
+            <div className="text-center">
+              <div className="text-lg font-bold">-</div>
+              <div className="text-xs text-muted-foreground">成员</div>
+            </div>
+            <div className="h-8 w-px bg-border" />
+            <div className="text-center">
+              <div className="text-lg font-bold">-</div>
+              <div className="text-xs text-muted-foreground">今日新帖</div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 筛选 */}
       <div className="flex items-center justify-between">
@@ -112,6 +128,18 @@ export default function BoardPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* 错误状态 */}
+      {error && !loading && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="flex flex-col items-center py-8">
+            <p className="text-sm text-destructive">{error}</p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={fetchData}>
+              重试
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 文章列表 */}
       <div className="space-y-3">
@@ -132,6 +160,33 @@ export default function BoardPage() {
           </div>
         )}
       </div>
+
+      {/* 分页 */}
+      {!loading && totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 pt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            上一页
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {page} / {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            下一页
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
