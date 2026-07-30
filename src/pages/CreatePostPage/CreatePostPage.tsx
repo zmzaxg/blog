@@ -23,7 +23,7 @@ interface CreatePostPageProps {
 export default function CreatePostPage({ isEdit = false }: CreatePostPageProps) {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const { isLoggedIn } = useAuth();
+  const { isLoggedIn, isLoading } = useAuth();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [boardId, setBoardId] = useState<string>('');
@@ -83,12 +83,12 @@ export default function CreatePostPage({ isEdit = false }: CreatePostPageProps) 
     loadPost();
   }, [isEdit, id, navigate]);
 
-  // 登录检查
+  // 登录检查（等加载完成后再判断）
   useEffect(() => {
-    if (!isLoggedIn) {
+    if (!isLoading && !isLoggedIn) {
       navigate('/login?redirect=' + encodeURIComponent(isEdit ? `/post/${id}/edit` : '/post/create'));
     }
-  }, [isLoggedIn, navigate, isEdit, id]);
+  }, [isLoading, isLoggedIn, navigate, isEdit, id]);
 
   // 图片上传
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -24,7 +24,7 @@ import { Image } from '@/components/ui/image';
 
 export default function ProfilePage() {
   const navigate = useNavigate();
-  const { user, isLoggedIn, isAdmin, logout } = useAuth();
+  const { user, isLoggedIn, isAdmin, logout, isLoading } = useAuth();
   const [postCount, setPostCount] = useState(0);
   const [loadingStats, setLoadingStats] = useState(true);
 
@@ -63,6 +63,14 @@ export default function ProfilePage() {
     toast.success('已退出登录');
     navigate('/');
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (!isLoggedIn) {
     return (

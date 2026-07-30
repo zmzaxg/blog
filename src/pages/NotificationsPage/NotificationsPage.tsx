@@ -38,7 +38,7 @@ const typeColors: Record<string, string> = {
 
 export default function NotificationsPage() {
   const navigate = useNavigate();
-  const { isLoggedIn } = useAuth();
+  const { isLoggedIn, isLoading } = useAuth();
   const [notifications, setNotifications] = useState<INotification[]>([]);
   const [activeTab, setActiveTab] = useState('all');
   const [loading, setLoading] = useState(true);
@@ -48,10 +48,10 @@ export default function NotificationsPage() {
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    if (!isLoggedIn) {
+    if (!isLoading && !isLoggedIn) {
       navigate('/login?redirect=/notifications');
     }
-  }, [isLoggedIn, navigate]);
+  }, [isLoading, isLoggedIn, navigate]);
 
   const fetchNotifications = useCallback(async () => {
     setLoading(true);
