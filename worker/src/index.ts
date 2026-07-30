@@ -86,48 +86,56 @@ function matchRoute(
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname;
+    try {
+      const url = new URL(request.url);
+      const path = url.pathname;
 
-    // CORS 预检
-    if (request.method === 'OPTIONS') {
-      return jsonResponse(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-          'Access-Control-Max-Age': '86400',
-        },
-      });
+      // CORS 预检
+      if (request.method === 'OPTIONS') {
+        return jsonResponse(null, {
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Max-Age': '86400',
+          },
+        });
+      }
+
+      // 静态文件 (前端构建产物)
+      if (
+        path.startsWith('/assets/') ||
+        path.startsWith('/static/') ||
+        path.endsWith('.js') ||
+        path.endsWith('.css') ||
+        path.endsWith('.svg') ||
+        path.endsWith('.png') ||
+        path.endsWith('.jpg') ||
+        path.endsWith('.ico') ||
+        path.endsWith('.webp')
+      ) {
+        if (env.ASSETS) {
+          return env.ASSETS.fetch(request);
+        }
+        return errorResponse('Not Found', 404);
+      }
+
+      // API 路由
+      if (path.startsWith('/api/')) {
+        return handleApiRoutes(request, env, path);
+      }
+
+      // 前端 SPA - 返回 index.html
+      if (env.ASSETS) {
+        const newRequest = new Request('/index.html', request);
+        return env.ASSETS.fetch(newRequest);
+      }
+
+      return errorResponse('Not Found', 404);
+    } catch (err) {
+      console.error('Worker error:', err);
+      return errorResponse(`Internal Server Error: ${String(err)}`, 500);
     }
-
-    // 静态文件 (前端构建产物)
-    if (
-      path.startsWith('/assets/') ||
-      path.startsWith('/static/') ||
-      path.endsWith('.js') ||
-      path.endsWith('.css') ||
-      path.endsWith('.svg') ||
-      path.endsWith('.png') ||
-      path.endsWith('.jpg') ||
-      path.endsWith('.ico') ||
-      path.endsWith('.webp')
-    ) {
-      return env.ASSETS ? env.ASSETS.fetch(request) : errorResponse('Not Found', 404);
-    }
-
-    // API 路由
-    if (path.startsWith('/api/')) {
-      return handleApiRoutes(request, env, path);
-    }
-
-    // 前端 SPA - 返回 index.html
-    if (env.ASSETS) {
-      const newRequest = new Request('/index.html', request);
-      return env.ASSETS.fetch(newRequest);
-    }
-
-    return errorResponse('Not Found', 404);
   },
 };
 
@@ -138,6 +146,8 @@ async function handleApiRoutes(
 ): Promise<Response> {
   const method = request.method;
   const apiPath = path.replace(/^\/api/, '');
+
+  try {
 
   // ============ 认证相关 ============
   let m = matchRoute(apiPath, '/auth/register');
@@ -286,4 +296,8 @@ async function handleApiRoutes(
 
   // 404
   return errorResponse('API 路由不存在', 404);
+  } catch (err) {
+    console.error('API error:', err);
+    return errorResponse(`API Error: ${String(err)}`, 500);
+  }
 }
