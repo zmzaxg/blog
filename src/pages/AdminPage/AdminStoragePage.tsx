@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -106,6 +107,15 @@ export default function AdminStoragePage() {
   const [d1BrowseLoading, setD1BrowseLoading] = useState(false);
   const [d1BrowseKeyword, setD1BrowseKeyword] = useState('');
   const [d1Cleaning, setD1Cleaning] = useState(false);
+
+  // WebDAV 数据浏览
+  const [webdavBrowseConfigId, setWebdavBrowseConfigId] = useState<number | null>(null);
+  const [webdavBrowseType, setWebdavBrowseType] = useState('posts');
+  const [webdavBrowseItems, setWebdavBrowseItems] = useState<Array<{ name: string; path: string; isDir: boolean; size: number; lastModified: string }>>([]);
+  const [webdavBrowseLoading, setWebdavBrowseLoading] = useState(false);
+  const [webdavBrowsePath, setWebdavBrowsePath] = useState('');
+  const [webdavSelected, setWebdavSelected] = useState<Set<string>>(new Set());
+  const [webdavDeleting, setWebdavDeleting] = useState(false);
 
   const fetchConfigs = useCallback(async () => {
     setLoading(true);
@@ -457,6 +467,96 @@ export default function AdminStoragePage() {
       toast.error('查询失败');
     } finally {
       setD1BrowseLoading(false);
+    }
+  };
+
+  // 浏览 WebDAV 数据（按类型目录）
+  const handleBrowseWebdav = async (configId: number, type: string, subPath = '') => {
+    setWebdavBrowseLoading(true);
+    setWebdavBrowseConfigId(configId);
+    setWebdavBrowseType(type);
+    setWebdavSelected(new Set());
+    try {
+      const browsePath = subPath ? `${type}/${subPath}` : type;
+      const res = await storageApi.browse(configId, browsePath);
+      if (res.success && res.data) {
+        const data = res.data as unknown as { items: Array<{ name: string; path: string; isDir: boolean; size: number; lastModified: string }>; path: string };
+        const items = (data.items || []).sort((a, b) => {
+          if (a.isDir && !b.isDir) return -1;
+          if (!a.isDir && b.isDir) return 1;
+          return a.name.localeCompare(b.name);
+        });
+        setWebdavBrowseItems(items);
+        setWebdavBrowsePath(data.path || '');
+      } else {
+        toast.error(res.message || '读取 WebDAV 目录失败');
+        setWebdavBrowseItems([]);
+      }
+    } catch {
+      toast.error('读取 WebDAV 目录失败');
+      setWebdavBrowseItems([]);
+    } finally {
+      setWebdavBrowseLoading(false);
+    }
+  };
+
+  // WebDAV 批量删除
+  const handleWebdavBatchDelete = async () => {
+    if (!webdavBrowseConfigId || webdavSelected.size === 0) return;
+    if (!confirm(`确定删除选中的 ${webdavSelected.size} 个项目？`)) return;
+    setWebdavDeleting(true);
+    let deleted = 0;
+    let failed = 0;
+    for (const path of webdavSelected) {
+      try {
+        const res = await storageApi.deleteItem(webdavBrowseConfigId, path);
+        if (res.success) deleted++;
+        else failed++;
+      } catch {
+        failed++;
+      }
+    }
+    setWebdavDeleting(false);
+    setWebdavSelected(new Set());
+    if (deleted > 0) toast.success(`已删除 ${deleted} 个项目`);
+    if (failed > 0) toast.error(`${failed} 个项目删除失败`);
+    handleBrowseWebdav(webdavBrowseConfigId, webdavBrowseType);
+  };
+
+  // WebDAV 单个删除
+  const handleWebdavDeleteItem = async (path: string) => {
+    if (!webdavBrowseConfigId) return;
+    if (!confirm(`确定删除 ${path.split('/').pop()}？`)) return;
+    try {
+      const res = await storageApi.deleteItem(webdavBrowseConfigId, path);
+      if (res.success) {
+        toast.success('删除成功');
+        handleBrowseWebdav(webdavBrowseConfigId, webdavBrowseType);
+      } else {
+        toast.error(res.message || '删除失败');
+      }
+    } catch {
+      toast.error('删除失败');
+    }
+  };
+
+  // 切换 WebDAV 选中项
+  const toggleWebdavSelect = (path: string) => {
+    setWebdavSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  // 全选/取消全选
+  const toggleWebdavSelectAll = () => {
+    const fileItems = webdavBrowseItems.filter((i) => !i.isDir);
+    if (webdavSelected.size === fileItems.length && fileItems.length > 0) {
+      setWebdavSelected(new Set());
+    } else {
+      setWebdavSelected(new Set(fileItems.map((i) => i.path)));
     }
   };
 
@@ -929,7 +1029,7 @@ export default function AdminStoragePage() {
                               variant="outline"
                               size="icon"
                               className="h-7 w-7"
-                              onClick={() => handlePreview(browsingConfigId, item.path)}
+                              onClick={(e) => { e.stopPropagation(); handlePreview(browsingConfigId, item.path); }}
                               title="预览"
                             >
                               <Eye className="h-3.5 w-3.5" />
@@ -939,10 +1039,7 @@ export default function AdminStoragePage() {
                             variant="outline"
                             size="icon"
                             className="h-7 w-7"
-                            onClick={() => {
-                              setRenamingPath(item.path);
-                              setNewName(item.name);
-                            }}
+                            onClick={(e) => { e.stopPropagation(); setRenamingPath(item.path); setNewName(item.name); }}
                             title="重命名"
                           >
                             <Edit className="h-3.5 w-3.5" />
@@ -951,7 +1048,7 @@ export default function AdminStoragePage() {
                             variant="outline"
                             size="icon"
                             className="h-7 w-7 text-destructive border-destructive/30"
-                            onClick={() => handleDeleteItem(item.path)}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.path); }}
                             title="删除"
                           >
                             <Trash className="h-3.5 w-3.5" />
@@ -1372,6 +1469,163 @@ export default function AdminStoragePage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* WebDAV 数据浏览 */}
+          {configs.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Folder className="h-4 w-4" />
+                  WebDAV 数据浏览
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  浏览 WebDAV 存储中的文件数据，支持单个和批量删除
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* 选择配置和数据类型 */}
+                <div className="flex flex-wrap gap-2">
+                  <Select
+                    value={String(webdavBrowseConfigId || '')}
+                    onValueChange={(v) => setWebdavBrowseConfigId(parseInt(v, 10))}
+                  >
+                    <SelectTrigger className="h-8 w-48 text-xs">
+                      <SelectValue placeholder="选择存储配置" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {configs.map((c) => (
+                        <SelectItem key={c.id} value={String(c.id)}>
+                          {c.name} {c.is_default === 1 ? '(默认)' : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {['posts', 'comments', 'users', 'images'].map((type) => (
+                    <Button
+                      key={type}
+                      variant={webdavBrowseType === type && webdavBrowseConfigId ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => {
+                        if (webdavBrowseConfigId) handleBrowseWebdav(webdavBrowseConfigId, type);
+                        else toast.error('请先选择存储配置');
+                      }}
+                    >
+                      {STORE_TYPES.find((t) => t.value === type)?.label || type}
+                    </Button>
+                  ))}
+                </div>
+
+                {/* 批量操作栏 */}
+                {webdavSelected.size > 0 && (
+                  <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+                    <span className="text-xs text-muted-foreground">
+                      已选中 {webdavSelected.size} 项
+                    </span>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleWebdavBatchDelete}
+                      disabled={webdavDeleting}
+                    >
+                      {webdavDeleting ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash className="mr-1 h-3 w-3" />
+                      )}
+                      批量删除
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setWebdavSelected(new Set())}
+                    >
+                      取消选择
+                    </Button>
+                  </div>
+                )}
+
+                {/* 文件列表 */}
+                {webdavBrowseLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : webdavBrowseItems.length > 0 ? (
+                  <div className="max-h-[400px] overflow-y-auto rounded border">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b bg-muted/30 text-left text-muted-foreground">
+                          <th className="w-8 px-3 py-2">
+                            <Checkbox
+                              checked={webdavBrowseItems.filter((i) => !i.isDir).length > 0 && webdavSelected.size === webdavBrowseItems.filter((i) => !i.isDir).length}
+                              onCheckedChange={toggleWebdavSelectAll}
+                            />
+                          </th>
+                          <th className="px-3 py-2 font-medium">名称</th>
+                          <th className="w-20 px-3 py-2 font-medium">大小</th>
+                          <th className="w-24 px-3 py-2 font-medium">修改时间</th>
+                          <th className="w-16 px-3 py-2 font-medium text-right">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {webdavBrowseItems.map((item, i) => (
+                          <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
+                            <td className="px-3 py-2">
+                              {!item.isDir && (
+                                <Checkbox
+                                  checked={webdavSelected.has(item.path)}
+                                  onCheckedChange={() => toggleWebdavSelect(item.path)}
+                                />
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                {item.isDir ? (
+                                  <Folder className="h-3.5 w-3.5 text-blue-500" />
+                                ) : (
+                                  <File className="h-3.5 w-3.5 text-muted-foreground" />
+                                )}
+                                <span className="truncate max-w-[200px]">{item.name}</span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground">
+                              {item.isDir ? '-' : formatSize(item.size)}
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground">
+                              {item.lastModified ? new Date(item.lastModified).toLocaleDateString('zh-CN') : '-'}
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              {!item.isDir && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 text-destructive"
+                                  onClick={() => handleWebdavDeleteItem(item.path)}
+                                  title="删除"
+                                >
+                                  <Trash className="h-3 w-3" />
+                                </Button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : webdavBrowseConfigId ? (
+                  <div className="py-6 text-center text-xs text-muted-foreground">
+                    空目录或未选择数据类型
+                  </div>
+                ) : (
+                  <div className="py-6 text-center text-xs text-muted-foreground">
+                    选择存储配置和数据类型开始浏览
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
     </div>

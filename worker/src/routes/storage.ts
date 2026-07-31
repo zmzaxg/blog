@@ -221,33 +221,27 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     const normalizedBase = baseUrl.replace(/\/$/, '');
     let relativePath = href;
 
-    if (href.startsWith('http://') || href.startsWith('https://')) {
-      // 绝对 URL：去掉 baseUrl 前缀
-      if (href.startsWith(normalizedBase)) {
-        relativePath = href.slice(normalizedBase.length);
+    try {
+      const baseUrlObj = new URL(normalizedBase);
+      const basePath = baseUrlObj.pathname.replace(/\/$/, '');
+
+      if (href.startsWith('http://') || href.startsWith('https://')) {
+        const hrefUrl = new URL(href);
+        if (hrefUrl.pathname.startsWith(basePath + '/')) {
+          relativePath = hrefUrl.pathname.slice(basePath.length + 1);
+        } else if (hrefUrl.pathname.startsWith(basePath)) {
+          relativePath = hrefUrl.pathname.slice(basePath.length);
+        }
       } else {
-        try {
-          const hrefUrl = new URL(href);
-          const baseUrlObj = new URL(normalizedBase);
-          const basePath = baseUrlObj.pathname.replace(/\/$/, '');
-          if (hrefUrl.pathname.startsWith(basePath)) {
-            relativePath = hrefUrl.pathname.slice(basePath.length);
-          }
-        } catch {
-          // 解析失败，保持原值
+        const resolvedUrl = new URL(href, normalizedBase);
+        if (resolvedUrl.pathname.startsWith(basePath + '/')) {
+          relativePath = resolvedUrl.pathname.slice(basePath.length + 1);
+        } else if (resolvedUrl.pathname.startsWith(basePath)) {
+          relativePath = resolvedUrl.pathname.slice(basePath.length);
         }
       }
-    } else {
-      // 相对路径
-      try {
-        const baseUrlObj = new URL(normalizedBase);
-        const basePath = baseUrlObj.pathname.replace(/\/$/, '');
-        if (href.startsWith(basePath)) {
-          relativePath = href.slice(basePath.length);
-        }
-      } catch {
-        // 解析失败，直接用 href
-      }
+    } catch {
+      // 解析失败，保持原值
     }
 
     relativePath = relativePath.replace(/^\//, '').replace(/\/$/, '');
@@ -919,14 +913,22 @@ export async function migrateToWebDAVHandler(
         }
       }
     } else if (body.type === 'users') {
-      // 迁移用户资料到 WebDAV
+      // 迁移用户资料到 WebDAV（使用确定性文件名，便于后续读取）
       const users = await env.DB.prepare(
-        "SELECT id, bio FROM users WHERE bio IS NOT NULL AND bio != '' LIMIT ?"
-      ).bind(limit).all<{ id: number; bio: string }>();
+        "SELECT id, username, nickname, bio, avatar FROM users WHERE status != 'banned' LIMIT ?"
+      ).bind(limit).all<{ id: number; username: string; nickname: string | null; bio: string | null; avatar: string | null }>();
 
       for (const user of users.results) {
-        const storageKey = `users/${user.id}_profile_${Date.now()}.json`;
-        const saved = await writeToWebDAV(configData, storageKey, JSON.stringify({ bio: user.bio }), 'application/json');
+        const storageKey = `users/${user.id}_profile.json`;
+        const profileData = JSON.stringify({
+          id: user.id,
+          username: user.username,
+          nickname: user.nickname || '',
+          bio: user.bio || '',
+          avatar: user.avatar || '',
+          migrated_at: new Date().toISOString(),
+        });
+        const saved = await writeToWebDAV(configData, storageKey, profileData, 'application/json');
         if (saved) {
           migrated++;
         } else {
@@ -1094,18 +1096,26 @@ export async function migrateFromWebDAVHandler(
 
       for (const file of jsonFiles) {
         try {
-          const match = file.name.match(/^(\d+)_profile_\d+\.json$/);
+          // 支持新格式 (1_profile.json) 和旧格式 (1_profile_xxx.json)
+          const match = file.name.match(/^(\d+)_profile(?:_\d+)?\.json$/);
           if (!match) { skipped++; continue; }
           const userId = match[1];
 
-          const content = await readFromWebDAV(configData, `users/${file.name}`);
-          if (!content) { errors++; continue; }
+          const fileContent = await readFromWebDAV(configData, `users/${file.name}`);
+          if (!fileContent) { errors++; continue; }
 
-          const data = JSON.parse(content);
-          if (data.bio) {
+          const data = JSON.parse(fileContent);
+          // 更新用户资料字段
+          const updates: string[] = [];
+          const values: (string | number)[] = [];
+          if (data.bio !== undefined) { updates.push('bio = ?'); values.push(data.bio); }
+          if (data.nickname !== undefined) { updates.push('nickname = ?'); values.push(data.nickname); }
+          if (data.avatar !== undefined) { updates.push('avatar = ?'); values.push(data.avatar); }
+          if (updates.length > 0) {
+            values.push(parseInt(userId, 10));
             await env.DB.prepare(
-              "UPDATE users SET bio = ? WHERE id = ?"
-            ).bind(data.bio, parseInt(userId, 10)).run();
+              `UPDATE users SET ${updates.join(', ')} WHERE id = ?`
+            ).bind(...values).run();
             migrated++;
           } else {
             skipped++;
