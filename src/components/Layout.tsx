@@ -7,7 +7,7 @@ import ThemeSwitcher from '@/components/ThemeSwitcher';
 export const Layout = () => {
   return (
     <AuthProvider>
-      <div className="mx-auto min-h-screen w-full max-w-screen-sm bg-background text-foreground">
+      <div className="mx-auto min-h-screen w-full max-w-screen-sm bg-background text-foreground overflow-x-hidden">
         <main className="pb-20">
           <Outlet />
         </main>

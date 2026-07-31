@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Plus, Edit, Trash2, HardDrive, Check, Database, Loader2, Folder, File,
   ChevronRight, ChevronLeft, Home, RefreshCw, Download, Upload, BarChart3,
-  ArrowUpDown, Settings, TestTube, Eye, MoreHorizontal, FolderPlus, Trash,
+  ArrowUpDown, Settings, TestTube, Eye, MoreHorizontal, FolderPlus, Trash, Search,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -94,7 +94,18 @@ export default function AdminStoragePage() {
 
   // 迁移状态
   const [migrating, setMigrating] = useState(false);
+  const [reverseMigrating, setReverseMigrating] = useState(false);
   const [cleaning, setCleaning] = useState(false);
+
+  // D1 数据浏览
+  const [d1BrowseType, setD1BrowseType] = useState('posts');
+  const [d1BrowseData, setD1BrowseData] = useState<Array<Record<string, unknown>>>([]);
+  const [d1BrowseTotal, setD1BrowseTotal] = useState(0);
+  const [d1BrowsePage, setD1BrowsePage] = useState(1);
+  const [d1BrowseTotalPages, setD1BrowseTotalPages] = useState(1);
+  const [d1BrowseLoading, setD1BrowseLoading] = useState(false);
+  const [d1BrowseKeyword, setD1BrowseKeyword] = useState('');
+  const [d1Cleaning, setD1Cleaning] = useState(false);
 
   const fetchConfigs = useCallback(async () => {
     setLoading(true);
@@ -405,6 +416,70 @@ export default function AdminStoragePage() {
     }
   };
 
+  // 反向迁移 WebDAV → D1
+  const handleReverseMigrate = async (configId: number, type: string) => {
+    if (!confirm(`确定将 WebDAV 中的 ${type} 数据反向迁移到 D1？这会将文件内容写回数据库。`)) return;
+    setReverseMigrating(true);
+    try {
+      const res = await storageApi.migrateReverse({ config_id: configId, type, limit: 100 });
+      if (res.success && res.data) {
+        const data = res.data as unknown as { migrated: number; errors: number; skipped: number };
+        toast.success(`反向迁移完成: 成功 ${data.migrated} 条，跳过 ${data.skipped} 条，失败 ${data.errors} 条`);
+      } else {
+        toast.error(res.message || '反向迁移失败');
+      }
+    } catch {
+      toast.error('反向迁移失败');
+    } finally {
+      setReverseMigrating(false);
+    }
+  };
+
+  // 浏览 D1 数据
+  const handleBrowseD1 = async (type: string, page = 1, keyword = '') => {
+    setD1BrowseLoading(true);
+    setD1BrowseType(type);
+    try {
+      const res = await storageApi.browseD1({ type, page, page_size: 20, keyword });
+      if (res.success && res.data) {
+        const data = res.data as unknown as { data: Array<Record<string, unknown>>; total: number; page: number; total_pages: number };
+        setD1BrowseData(data.data || []);
+        setD1BrowseTotal(data.total || 0);
+        setD1BrowsePage(data.page || 1);
+        setD1BrowseTotalPages(data.total_pages || 1);
+      } else {
+        toast.error(res.message || '查询失败');
+      }
+    } catch {
+      toast.error('查询失败');
+    } finally {
+      setD1BrowseLoading(false);
+    }
+  };
+
+  // 清理 D1 数据
+  const handleCleanupD1 = async (type: string, onlyMigrated = true) => {
+    const msg = onlyMigrated
+      ? `确定清理 D1 中已迁移到 WebDAV 的 ${type} 数据？`
+      : `确定清理选中的 ${type} 数据？`;
+    if (!confirm(msg)) return;
+    setD1Cleaning(true);
+    try {
+      const res = await storageApi.cleanupD1({ type, only_migrated: onlyMigrated });
+      if (res.success && res.data) {
+        const data = res.data as unknown as { deleted: number };
+        toast.success(`清理完成: ${data.deleted} 条数据已标记删除`);
+        handleBrowseD1(type, d1BrowsePage, d1BrowseKeyword);
+      } else {
+        toast.error(res.message || '清理失败');
+      }
+    } catch {
+      toast.error('清理失败');
+    } finally {
+      setD1Cleaning(false);
+    }
+  };
+
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -431,7 +506,7 @@ export default function AdminStoragePage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-x-hidden">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="configs" className="text-xs">
@@ -1047,6 +1122,33 @@ export default function AdminStoragePage() {
                     </div>
                   </div>
 
+                  {/* WebDAV → D1 反向迁移 */}
+                  <div>
+                    <h4 className="text-sm font-medium mb-1">WebDAV → D1 反向迁移</h4>
+                    <p className="text-[10px] text-muted-foreground mb-2">
+                      将 WebDAV 中的文件内容写回 D1 数据库（已存在数据会跳过）
+                    </p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {['posts', 'comments', 'users'].map((type) => (
+                        <Button
+                          key={type}
+                          variant="outline"
+                          size="sm"
+                          className="h-9 text-xs gap-1"
+                          onClick={() => handleReverseMigrate(config.id, type)}
+                          disabled={reverseMigrating}
+                        >
+                          {reverseMigrating ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Download className="h-3 w-3" />
+                          )}
+                          反向迁移{STORE_TYPES.find((t) => t.value === type)?.label || type}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* WebDAV 数据清理 */}
                   <div>
                     <h4 className="text-sm font-medium mb-1">WebDAV 数据清理</h4>
@@ -1074,23 +1176,6 @@ export default function AdminStoragePage() {
                     </div>
                   </div>
 
-                  {/* D1 数据清理 */}
-                  <div>
-                    <h4 className="text-sm font-medium mb-1">D1 数据清理</h4>
-                    <p className="text-[10px] text-muted-foreground mb-2">
-                      清理数据库中已迁移到 WebDAV 的数据（释放数据库空间）
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-9 text-xs gap-1"
-                      disabled
-                    >
-                      <Trash className="h-3 w-3" />
-                      清理已迁移数据（开发中）
-                    </Button>
-                  </div>
-
                   {/* 浏览 WebDAV 数据 */}
                   <div>
                     <h4 className="text-sm font-medium mb-1">浏览 WebDAV 数据</h4>
@@ -1114,6 +1199,176 @@ export default function AdminStoragePage() {
               </Card>
             ))
           )}
+
+          {/* D1 数据库管理 */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Database className="h-4 w-4" />
+                D1 数据库管理
+              </CardTitle>
+              <CardDescription className="text-xs">
+                浏览和清理 D1 数据库中的数据
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* D1 数据浏览 */}
+              <div>
+                <h4 className="text-sm font-medium mb-2">D1 数据浏览</h4>
+                <div className="flex gap-2 mb-3">
+                  {['posts', 'comments', 'users'].map((type) => (
+                    <Button
+                      key={type}
+                      variant={d1BrowseType === type ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => {
+                        setD1BrowsePage(1);
+                        setD1BrowseKeyword('');
+                        handleBrowseD1(type, 1, '');
+                      }}
+                    >
+                      {STORE_TYPES.find((t) => t.value === type)?.label || type}
+                    </Button>
+                  ))}
+                </div>
+
+                <div className="flex gap-2 mb-3">
+                  <div className="relative flex-1 max-w-xs">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      type="search"
+                      placeholder="搜索..."
+                      value={d1BrowseKeyword}
+                      onChange={(e) => setD1BrowseKeyword(e.target.value)}
+                      className="h-8 pl-9 text-xs"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          setD1BrowsePage(1);
+                          handleBrowseD1(d1BrowseType, 1, d1BrowseKeyword);
+                        }
+                      }}
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => {
+                      setD1BrowsePage(1);
+                      handleBrowseD1(d1BrowseType, 1, d1BrowseKeyword);
+                    }}
+                  >
+                    搜索
+                  </Button>
+                  {d1BrowseTotal > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs gap-1 text-destructive border-destructive/30"
+                      onClick={() => handleCleanupD1(d1BrowseType, true)}
+                      disabled={d1Cleaning}
+                    >
+                      {d1Cleaning ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash className="h-3 w-3" />
+                      )}
+                      清理已迁移数据
+                    </Button>
+                  )}
+                </div>
+
+                {d1BrowseLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : d1BrowseData.length > 0 ? (
+                  <>
+                    <div className="text-xs text-muted-foreground mb-2">
+                      共 {d1BrowseTotal} 条记录
+                    </div>
+                    <div className="max-h-[400px] overflow-y-auto rounded border">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b bg-muted/30 text-left text-muted-foreground">
+                            <th className="px-3 py-2 font-medium">ID</th>
+                            {d1BrowseType === 'posts' && <th className="px-3 py-2 font-medium">标题</th>}
+                            {d1BrowseType === 'comments' && <th className="px-3 py-2 font-medium">帖子ID</th>}
+                            {d1BrowseType === 'users' && <th className="px-3 py-2 font-medium">用户名</th>}
+                            <th className="px-3 py-2 font-medium">存储Key</th>
+                            <th className="px-3 py-2 font-medium">创建时间</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {d1BrowseData.map((row, i) => (
+                            <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
+                              <td className="px-3 py-2 font-mono">{String(row.id)}</td>
+                              {d1BrowseType === 'posts' && (
+                                <td className="max-w-[200px] truncate px-3 py-2">{String(row.title || '-')}</td>
+                              )}
+                              {d1BrowseType === 'comments' && (
+                                <td className="px-3 py-2">{String(row.post_id || '-')}</td>
+                              )}
+                              {d1BrowseType === 'users' && (
+                                <td className="px-3 py-2">{String(row.username || '-')}</td>
+                              )}
+                              <td className="max-w-[150px] truncate px-3 py-2 font-mono text-muted-foreground">
+                                {row.storage_key ? String(row.storage_key) : (
+                                  <span className="text-yellow-500">未迁移</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground">
+                                {row.created_at ? new Date(String(row.created_at)).toLocaleDateString('zh-CN') : '-'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {/* 分页 */}
+                    {d1BrowseTotalPages > 1 && (
+                      <div className="flex items-center justify-center gap-2 pt-3">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={d1BrowsePage <= 1}
+                          onClick={() => {
+                            const newPage = d1BrowsePage - 1;
+                            setD1BrowsePage(newPage);
+                            handleBrowseD1(d1BrowseType, newPage, d1BrowseKeyword);
+                          }}
+                        >
+                          上一页
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          {d1BrowsePage} / {d1BrowseTotalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={d1BrowsePage >= d1BrowseTotalPages}
+                          onClick={() => {
+                            const newPage = d1BrowsePage + 1;
+                            setD1BrowsePage(newPage);
+                            handleBrowseD1(d1BrowseType, newPage, d1BrowseKeyword);
+                          }}
+                        >
+                          下一页
+                        </Button>
+                      </div>
+                    )}
+                  </>
+                ) : d1BrowseTotal === 0 && d1BrowseData.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-muted-foreground">
+                    点击上方按钮查看数据
+                  </div>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>

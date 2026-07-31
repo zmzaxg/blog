@@ -129,7 +129,7 @@ export default function AdminBoardsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 overflow-x-hidden">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold">板块管理</h2>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

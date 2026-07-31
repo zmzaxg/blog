@@ -71,7 +71,7 @@ export default function AdminDashboardPage() {
   const maxCount = Math.max(...(stats?.trend?.map((t) => t.count) || [1]));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-x-hidden">
       {/* 待审核提示 */}
       {stats && stats.pending_comments > 0 && (
         <Card className="border-warning/30 bg-warning/10">

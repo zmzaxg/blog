@@ -131,7 +131,7 @@ export default function NotificationsPage() {
   if (!isLoggedIn) return null;
 
   return (
-    <div className="space-y-4 pb-4">
+    <div className="space-y-4 pb-4 overflow-x-hidden">
       {/* 顶部栏 */}
       <div className="sticky top-0 z-10 -mx-4 bg-background/80 px-4 py-3 backdrop-blur-md">
         <div className="flex items-center justify-between">

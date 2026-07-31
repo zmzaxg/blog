@@ -96,7 +96,7 @@ export default function HomePage() {
   };
 
   return (
-    <div className="space-y-4 pb-4">
+    <div className="space-y-4 pb-4 overflow-x-hidden">
       {/* 顶部栏 */}
       <header className="sticky top-0 z-40 border-b border-border/50 bg-background/80 px-4 py-3 backdrop-blur-md">
         <div className="flex items-center gap-3">

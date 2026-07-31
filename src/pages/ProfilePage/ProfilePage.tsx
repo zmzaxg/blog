@@ -95,7 +95,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="space-y-4 pb-4">
+    <div className="space-y-4 pb-4 overflow-x-hidden">
       {/* 顶部用户卡片 */}
       <div className="bg-gradient-to-br from-primary/10 via-card to-card px-4 pb-6 pt-8">
         <div className="flex items-start justify-between">

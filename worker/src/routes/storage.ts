@@ -163,15 +163,44 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     const href = decodeURIComponent(hrefMatch[1]);
 
     // 提取资源类型 - 检测是否为目录
-    // 多种方式判断:
-    // 1. resourcetype 中包含 collection
-    // 2. href 结尾是 /
-    // 3. 没有 getcontentlength 且没有文件扩展名
-    const hasCollection = /collection/i.test(block) && /resourcetype/i.test(block);
+    // 判断策略（优先级从高到低）:
+    // 1. resourcetype 中包含 collection → 一定是目录
+    // 2. href 结尾是 / → 一定是目录
+    // 3. 有 getcontentlength → 一定是文件
+    // 4. 有已知文件扩展名 → 是文件
+    // 5. 其他情况默认为文件
+    const hasCollection = /<[^>]*resourcetype[^>]*>[\s\S]*?collection[\s\S]*?<\/[^>]*resourcetype>/i.test(block);
     const endsWithSlash = href.endsWith('/');
-    const hasNoContentLength = !/<(?:d:|D:)?getcontentlength>\d+<\/(?:d:|D:)?getcontentlength>/i.test(block);
-    const hasNoExtension = !/\.[a-zA-Z0-9]{1,10}(?:\?|$)/.test(href.split('/').pop() || '');
-    const isDir = hasCollection || endsWithSlash || (hasNoContentLength && hasNoExtension);
+    const hasContentLength = /<(?:d:|D:)?getcontentlength>\d+<\/(?:d:|D:)?getcontentlength>/i.test(block);
+    const hasMimeType = /<(?:d:|D:)?getcontenttype>[^<]+<\/(?:d:|D:)?getcontenttype>/i.test(block);
+
+    // 检查是否有已知文件扩展名
+    const lastSegment = href.split('/').filter(Boolean).pop() || '';
+    const fileExtMatch = lastSegment.match(/\.([a-zA-Z0-9]{1,10})(?:\?|$)/);
+    const hasFileExtension = !!fileExtMatch;
+    const knownFileExts = ['md', 'txt', 'json', 'xml', 'html', 'css', 'js', 'ts', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'pdf', 'zip', 'tar', 'gz', 'mp3', 'mp4', 'wav', 'ogg', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'log', 'bak', 'sql', 'db'];
+    const isKnownFileExt = fileExtMatch && knownFileExts.includes(fileExtMatch[1].toLowerCase());
+
+    let isDir: boolean;
+    if (hasCollection) {
+      // 明确标记为 collection 的是目录
+      isDir = true;
+    } else if (endsWithSlash) {
+      // URL 以 / 结尾的是目录
+      isDir = true;
+    } else if (hasContentLength || hasMimeType) {
+      // 有 content length 或 MIME type 的是文件
+      isDir = false;
+    } else if (isKnownFileExt) {
+      // 有已知文件扩展名的是文件
+      isDir = false;
+    } else if (hasFileExtension) {
+      // 有任何文件扩展名的也视为文件
+      isDir = false;
+    } else {
+      // 没有任何标识的，默认为文件（避免误判目录）
+      isDir = false;
+    }
 
     // 提取大小
     const sizeMatch = block.match(/<(?:d:|D:)?getcontentlength>(\d+)<\/(?:d:|D:)?getcontentlength>/i);
@@ -180,6 +209,15 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     // 提取最后修改时间
     const modifiedMatch = block.match(/<(?:d:|D:)?getlastmodified>([^<]+)<\/(?:d:|D:)?getlastmodified>/i);
     const lastModified = modifiedMatch ? modifiedMatch[1] : '';
+
+    // 提取 MIME 类型
+    const mimeMatch = block.match(/<(?:d:|D:)?getcontenttype>([^<]+)<\/(?:d:|D:)?getcontenttype>/i);
+    const contentType = mimeMatch ? mimeMatch[1] : '';
+
+    // 如果 MIME 类型是 httpd/unix-directory，则是目录
+    if (contentType === 'httpd/unix-directory') {
+      isDir = true;
+    }
 
     // 计算相对路径和文件名
     const normalizedBase = baseUrl.replace(/\/$/, '');
@@ -882,6 +920,337 @@ export async function migrateToWebDAVHandler(
     }, `迁移完成: 成功 ${migrated} 条，失败 ${errors} 条`);
   } catch (e) {
     return errorResponse(`迁移失败: ${String(e)}`);
+  }
+}
+
+// 数据迁移：WebDAV → D1（反向迁移）
+export async function migrateFromWebDAVHandler(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const body = await parseBody<{
+    config_id: number;
+    type: string; // posts, comments, users
+    limit?: number;
+  }>(request);
+
+  if (!body?.config_id || !body?.type) {
+    return errorResponse('配置ID和数据类型不能为空');
+  }
+
+  const config = await getStorageConfigById(env, body.config_id);
+  if (!config) {
+    return errorResponse('存储配置不存在', 404);
+  }
+
+  const configData = JSON.parse(config.config) as WebDAVConfig;
+  const limit = body.limit || 100;
+
+  try {
+    let migrated = 0;
+    let errors = 0;
+    let skipped = 0;
+
+    if (body.type === 'posts') {
+      // 获取 WebDAV 中的文章文件列表
+      const dirUrl = buildWebDAVUrl(configData, 'posts');
+      const resp = await webdavRequest(dirUrl, 'PROPFIND', configData);
+      if (!resp.ok && resp.status !== 207) {
+        return errorResponse(`读取 WebDAV 目录失败: HTTP ${resp.status}`);
+      }
+      const text = await resp.text();
+      const items = parseWebDAVXml(text, dirUrl);
+      const mdFiles = items.filter(i => !i.isDir && i.name.endsWith('.md')).slice(0, limit);
+
+      for (const file of mdFiles) {
+        try {
+          // 从文件名解析信息 (格式: userId_post_timestamp_postId.md)
+          const match = file.name.match(/^(\d+)_post_(\d+)_(\d+)\.md$/);
+          if (!match) { skipped++; continue; }
+          const [, authorId, , postId] = match;
+
+          // 检查 D1 中是否已存在
+          const existing = await env.DB.prepare(
+            'SELECT id, storage_key FROM posts WHERE id = ?'
+          ).bind(parseInt(postId, 10)).first<{ id: number; storage_key: string | null }>();
+
+          if (existing && existing.storage_key) {
+            skipped++;
+            continue; // 已有数据，跳过
+          }
+
+          // 从 WebDAV 读取内容
+          const content = await readFromWebDAV(configData, `posts/${file.name}`);
+          if (!content) { errors++; continue; }
+
+          if (existing) {
+            // 更新现有记录
+            await env.DB.prepare(
+              "UPDATE posts SET content_md = ?, storage_key = ? WHERE id = ?"
+            ).bind(content, `posts/${file.name}`, existing.id).run();
+          } else {
+            // 创建新记录（如果不存在）
+            await env.DB.prepare(
+              "INSERT INTO posts (id, author_id, content_md, storage_key, storage_version, title, summary, status, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, 'published', datetime('now'), datetime('now'))"
+            ).bind(
+              parseInt(postId, 10),
+              parseInt(authorId, 10),
+              content,
+              `posts/${file.name}`,
+              `迁移文章 #${postId}`,
+              content.substring(0, 100)
+            ).run();
+          }
+          migrated++;
+        } catch {
+          errors++;
+        }
+      }
+    } else if (body.type === 'comments') {
+      const dirUrl = buildWebDAVUrl(configData, 'comments');
+      const resp = await webdavRequest(dirUrl, 'PROPFIND', configData);
+      if (!resp.ok && resp.status !== 207) {
+        return errorResponse(`读取 WebDAV 目录失败: HTTP ${resp.status}`);
+      }
+      const text = await resp.text();
+      const items = parseWebDAVXml(text, dirUrl);
+      const mdFiles = items.filter(i => !i.isDir && i.name.endsWith('.md')).slice(0, limit);
+
+      for (const file of mdFiles) {
+        try {
+          const match = file.name.match(/^(\d+)_comment_(\d+)_(\d+)\.md$/);
+          if (!match) { skipped++; continue; }
+          const [, authorId, , commentId] = match;
+
+          const existing = await env.DB.prepare(
+            'SELECT id, storage_key FROM comments WHERE id = ?'
+          ).bind(parseInt(commentId, 10)).first<{ id: number; storage_key: string | null }>();
+
+          if (existing && existing.storage_key) {
+            skipped++;
+            continue;
+          }
+
+          const content = await readFromWebDAV(configData, `comments/${file.name}`);
+          if (!content) { errors++; continue; }
+
+          if (existing) {
+            await env.DB.prepare(
+              "UPDATE comments SET content_md = ?, storage_key = ? WHERE id = ?"
+            ).bind(content, `comments/${file.name}`, existing.id).run();
+          } else {
+            await env.DB.prepare(
+              "INSERT INTO comments (id, author_id, post_id, content_md, storage_key, storage_version, status, created_at, updated_at) VALUES (?, ?, 0, ?, ?, 1, 'approved', datetime('now'), datetime('now'))"
+            ).bind(
+              parseInt(commentId, 10),
+              parseInt(authorId, 10),
+              content,
+              `comments/${file.name}`
+            ).run();
+          }
+          migrated++;
+        } catch {
+          errors++;
+        }
+      }
+    } else if (body.type === 'users') {
+      const dirUrl = buildWebDAVUrl(configData, 'users');
+      const resp = await webdavRequest(dirUrl, 'PROPFIND', configData);
+      if (!resp.ok && resp.status !== 207) {
+        return errorResponse(`读取 WebDAV 目录失败: HTTP ${resp.status}`);
+      }
+      const text = await resp.text();
+      const items = parseWebDAVXml(text, dirUrl);
+      const jsonFiles = items.filter(i => !i.isDir && i.name.endsWith('.json')).slice(0, limit);
+
+      for (const file of jsonFiles) {
+        try {
+          const match = file.name.match(/^(\d+)_profile_\d+\.json$/);
+          if (!match) { skipped++; continue; }
+          const userId = match[1];
+
+          const content = await readFromWebDAV(configData, `users/${file.name}`);
+          if (!content) { errors++; continue; }
+
+          const data = JSON.parse(content);
+          if (data.bio) {
+            await env.DB.prepare(
+              "UPDATE users SET bio = ? WHERE id = ?"
+            ).bind(data.bio, parseInt(userId, 10)).run();
+            migrated++;
+          } else {
+            skipped++;
+          }
+        } catch {
+          errors++;
+        }
+      }
+    } else {
+      return errorResponse('不支持的数据类型');
+    }
+
+    return successResponse({
+      type: body.type,
+      migrated,
+      errors,
+      skipped,
+      limit,
+    }, `反向迁移完成: 成功 ${migrated} 条，跳过 ${skipped} 条，失败 ${errors} 条`);
+  } catch (e) {
+    return errorResponse(`迁移失败: ${String(e)}`);
+  }
+}
+
+// 浏览 D1 数据库数据
+export async function browseD1DataHandler(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const url = new URL(request.url);
+  const type = url.searchParams.get('type') || 'posts';
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
+  const pageSize = Math.min(parseInt(url.searchParams.get('page_size') || '20', 10), 100);
+  const offset = (page - 1) * pageSize;
+  const keyword = url.searchParams.get('keyword') || '';
+
+  try {
+    let data: unknown[] = [];
+    let total = 0;
+
+    if (type === 'posts') {
+      let where = "WHERE status != 'deleted'";
+      const params: (string | number)[] = [];
+      if (keyword) {
+        where += ' AND (title LIKE ? OR content_md LIKE ?)';
+        params.push(`%${keyword}%`, `%${keyword}%`);
+      }
+      const countResult = await env.DB.prepare(`SELECT COUNT(*) as cnt FROM posts ${where}`)
+        .bind(...params).first<{ cnt: number }>();
+      total = countResult?.cnt || 0;
+
+      const result = await env.DB.prepare(
+        `SELECT id, author_id, title, storage_key, storage_version, status, created_at, updated_at FROM posts ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
+      ).bind(...params, pageSize, offset).all();
+      data = result.results;
+    } else if (type === 'comments') {
+      let where = "WHERE status != 'deleted'";
+      const params: (string | number)[] = [];
+      if (keyword) {
+        where += ' AND content_md LIKE ?';
+        params.push(`%${keyword}%`);
+      }
+      const countResult = await env.DB.prepare(`SELECT COUNT(*) as cnt FROM comments ${where}`)
+        .bind(...params).first<{ cnt: number }>();
+      total = countResult?.cnt || 0;
+
+      const result = await env.DB.prepare(
+        `SELECT id, author_id, post_id, storage_key, storage_version, status, created_at FROM comments ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
+      ).bind(...params, pageSize, offset).all();
+      data = result.results;
+    } else if (type === 'users') {
+      let where = "WHERE status != 'banned'";
+      const params: (string | number)[] = [];
+      if (keyword) {
+        where += ' AND (username LIKE ? OR nickname LIKE ? OR bio LIKE ?)';
+        params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+      }
+      const countResult = await env.DB.prepare(`SELECT COUNT(*) as cnt FROM users ${where}`)
+        .bind(...params).first<{ cnt: number }>();
+      total = countResult?.cnt || 0;
+
+      const result = await env.DB.prepare(
+        `SELECT id, username, nickname, bio, created_at FROM users ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
+      ).bind(...params, pageSize, offset).all();
+      data = result.results;
+    } else {
+      return errorResponse('不支持的数据类型');
+    }
+
+    return successResponse({
+      type,
+      data,
+      total,
+      page,
+      page_size: pageSize,
+      total_pages: Math.ceil(total / pageSize),
+    });
+  } catch (e) {
+    return errorResponse(`查询失败: ${String(e)}`);
+  }
+}
+
+// 清理 D1 数据库数据
+export async function cleanupD1DataHandler(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const auth = await authMiddleware(request, env);
+  const err = requireAdmin(auth);
+  if (err) return err;
+
+  const body = await parseBody<{
+    type: string; // posts, comments, users
+    only_migrated?: boolean; // 仅清理已迁移到 WebDAV 的数据
+    ids?: number[]; // 指定清理的 ID
+  }>(request);
+
+  if (!body?.type) {
+    return errorResponse('数据类型不能为空');
+  }
+
+  try {
+    let deleted = 0;
+
+    if (body.type === 'posts') {
+      if (body.ids && body.ids.length > 0) {
+        // 按 ID 清理
+        for (const id of body.ids) {
+          await env.DB.prepare("UPDATE posts SET status = 'deleted' WHERE id = ?").bind(id).run();
+          deleted++;
+        }
+      } else if (body.only_migrated) {
+        // 仅清理已迁移的（有 storage_key 的）
+        const result = await env.DB.prepare(
+          "UPDATE posts SET status = 'deleted' WHERE storage_key IS NOT NULL AND storage_key != '' AND status != 'deleted'"
+        ).run();
+        deleted = result.meta.changes || 0;
+      } else {
+        return errorResponse('请指定要清理的数据 ID 或设置 only_migrated = true');
+      }
+    } else if (body.type === 'comments') {
+      if (body.ids && body.ids.length > 0) {
+        for (const id of body.ids) {
+          await env.DB.prepare("UPDATE comments SET status = 'deleted' WHERE id = ?").bind(id).run();
+          deleted++;
+        }
+      } else if (body.only_migrated) {
+        const result = await env.DB.prepare(
+          "UPDATE comments SET status = 'deleted' WHERE storage_key IS NOT NULL AND storage_key != '' AND status != 'deleted'"
+        ).run();
+        deleted = result.meta.changes || 0;
+      } else {
+        return errorResponse('请指定要清理的数据 ID 或设置 only_migrated = true');
+      }
+    } else if (body.type === 'users') {
+      return errorResponse('用户数据不支持批量清理，请逐个管理');
+    } else {
+      return errorResponse('不支持的数据类型');
+    }
+
+    return successResponse({
+      type: body.type,
+      deleted,
+    }, `清理完成: ${deleted} 条数据已标记为删除`);
+  } catch (e) {
+    return errorResponse(`清理失败: ${String(e)}`);
   }
 }
 

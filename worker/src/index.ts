@@ -54,6 +54,9 @@ import {
   renameWebDAVItemHandler,
   readWebDAVFileHandler,
   migrateToWebDAVHandler,
+  migrateFromWebDAVHandler,
+  browseD1DataHandler,
+  cleanupD1DataHandler,
   cleanupWebDAVHandler,
   storageStatsHandler,
 } from './routes/storage';
@@ -62,6 +65,7 @@ import {
   markNotificationReadHandler,
   markAllReadHandler,
   sendTestEmailHandler,
+  verifySmtpHandler,
 } from './routes/notifications';
 import {
   setupStatusHandler,
@@ -315,6 +319,24 @@ async function handleApiRoutes(
     return migrateToWebDAVHandler(request, env);
   }
 
+  // 数据反向迁移 WebDAV → D1
+  m = matchRoute(apiPath, '/storage/migrate-reverse');
+  if (m.matched && method === 'POST') {
+    return migrateFromWebDAVHandler(request, env);
+  }
+
+  // 浏览 D1 数据
+  m = matchRoute(apiPath, '/storage/d1/browse');
+  if (m.matched && method === 'GET') {
+    return browseD1DataHandler(request, env);
+  }
+
+  // 清理 D1 数据
+  m = matchRoute(apiPath, '/storage/d1/cleanup');
+  if (m.matched && method === 'POST') {
+    return cleanupD1DataHandler(request, env);
+  }
+
   // 数据清理
   m = matchRoute(apiPath, '/storage/cleanup');
   if (m.matched && method === 'POST') {
@@ -353,6 +375,9 @@ async function handleApiRoutes(
 
   m = matchRoute(apiPath, '/admin/email/test');
   if (m.matched && method === 'POST') return sendTestEmailHandler(request, env);
+
+  m = matchRoute(apiPath, '/admin/email/verify');
+  if (m.matched && method === 'GET') return verifySmtpHandler(request, env);
 
   // ============ 首次配置 (Setup) ============
   m = matchRoute(apiPath, '/setup/status');

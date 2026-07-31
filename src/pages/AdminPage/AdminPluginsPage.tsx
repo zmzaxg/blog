@@ -38,7 +38,7 @@ export default function AdminPluginsPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 overflow-x-hidden">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold">插件管理</h2>
         <Button size="sm" className="h-8 gap-1" onClick={() => toast.info('插件市场开发中')}>

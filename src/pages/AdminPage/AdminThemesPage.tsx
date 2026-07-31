@@ -19,7 +19,7 @@ export default function AdminThemesPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-x-hidden">
       <div>
         <h2 className="text-base font-semibold">主题管理</h2>
         <p className="mt-1 text-xs text-muted-foreground">

@@ -195,7 +195,10 @@ export const adminApi = {
   },
 
   sendTestEmail: (data: { to: string; subject: string; content: string }) =>
-    request('/admin/email/test', { method: 'POST', body: JSON.stringify(data) }),
+    request<{ method: string; smtp_host?: string; smtp_port?: string; note?: string }>('/admin/email/test', { method: 'POST', body: JSON.stringify(data) }),
+
+  verifySmtp: () =>
+    request<{ valid: boolean; message: string; config: { host: string; port: string; user: string; from: string; has_password: boolean } }>('/admin/email/verify'),
 };
 
 // ============ 存储 API ============
@@ -312,7 +315,37 @@ export const storageApi = {
       body: JSON.stringify(data),
     }),
 
-  // 数据清理
+  // 数据反向迁移 WebDAV → D1
+  migrateReverse: (data: { config_id: number; type: string; limit?: number }) =>
+    request<{ type: string; migrated: number; errors: number; skipped: number; limit: number }>('/storage/migrate-reverse', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // 浏览 D1 数据
+  browseD1: (params: { type: string; page?: number; page_size?: number; keyword?: string }) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null) searchParams.set(k, String(v));
+    });
+    return request<{
+      type: string;
+      data: Array<Record<string, unknown>>;
+      total: number;
+      page: number;
+      page_size: number;
+      total_pages: number;
+    }>(`/storage/d1/browse?${searchParams.toString()}`);
+  },
+
+  // 清理 D1 数据
+  cleanupD1: (data: { type: string; only_migrated?: boolean; ids?: number[] }) =>
+    request<{ type: string; deleted: number }>('/storage/d1/cleanup', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // 数据清理 (WebDAV)
   cleanup: (data: { config_id: number; type: string; keep_latest?: number }) =>
     request<{ type: string; deleted: number; kept: number }>('/storage/cleanup', {
       method: 'POST',

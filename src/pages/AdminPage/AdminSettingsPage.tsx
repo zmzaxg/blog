@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Mail, Shield, Globe, Database, Loader2 } from 'lucide-react';
+import { Save, Mail, Shield, Globe, Database, Loader2, Send, CheckCircle, XCircle, TestTube } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { adminApi, setupApi } from '@/lib/api';
 import { toast } from 'sonner';
 
@@ -14,6 +15,10 @@ export default function AdminSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isBuiltin, setIsBuiltin] = useState(false);
+  const [testEmail, setTestEmail] = useState('');
+  const [testingEmail, setTestingEmail] = useState(false);
+  const [verifyingSmtp, setVerifyingSmtp] = useState(false);
+  const [smtpStatus, setSmtpStatus] = useState<{ valid: boolean; message: string } | null>(null);
   const [settings, setSettings] = useState({
     site_name: '轻社区博客',
     site_description: '一个基于 Cloudflare Worker + D1 的轻量级社区博客系统',
@@ -159,7 +164,7 @@ export default function AdminSettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 overflow-x-hidden">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold">系统设置</h2>
         <div className="flex gap-2">
@@ -361,31 +366,107 @@ export default function AdminSettingsPage() {
                   className="h-9 text-sm"
                 />
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={async () => {
-                  const to = prompt('请输入测试收件邮箱:');
-                  if (!to) return;
-                  try {
-                    const res = await adminApi.sendTestEmail({
-                      to,
-                      subject: '轻社区博客 - 邮件测试',
-                      content: '<h2>邮件测试成功！</h2><p>如果你看到这封邮件，说明 SMTP 配置正确。</p>',
-                    });
-                    if (res.success) {
-                      toast.success('测试邮件发送成功');
-                    } else {
-                      toast.error(res.message || '发送失败');
-                    }
-                  } catch {
-                    toast.error('发送失败，请检查 SMTP 配置');
-                  }
-                }}
-              >
-                发送测试邮件
-              </Button>
+              <div className="space-y-3 rounded-lg border p-3">
+                <div className="flex items-center gap-2">
+                  <TestTube className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">邮件测试</span>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">测试收件邮箱</Label>
+                  <Input
+                    value={testEmail}
+                    onChange={(e) => setTestEmail(e.target.value)}
+                    placeholder="test@example.com"
+                    className="h-9 text-sm"
+                    type="email"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1 h-9 text-xs gap-1"
+                    onClick={async () => {
+                      setVerifyingSmtp(true);
+                      setSmtpStatus(null);
+                      try {
+                        const res = await adminApi.verifySmtp();
+                        if (res.success && res.data) {
+                          setSmtpStatus({ valid: res.data.valid, message: res.data.message });
+                        } else {
+                          setSmtpStatus({ valid: false, message: res.message || '验证失败' });
+                        }
+                      } catch {
+                        setSmtpStatus({ valid: false, message: '验证请求失败' });
+                      } finally {
+                        setVerifyingSmtp(false);
+                      }
+                    }}
+                    disabled={verifyingSmtp}
+                  >
+                    {verifyingSmtp ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <CheckCircle className="h-3.5 w-3.5" />
+                    )}
+                    验证配置
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="flex-1 h-9 text-xs gap-1"
+                    onClick={async () => {
+                      if (!testEmail) {
+                        toast.error('请输入测试收件邮箱');
+                        return;
+                      }
+                      if (!testEmail.includes('@')) {
+                        toast.error('请输入有效的邮箱地址');
+                        return;
+                      }
+                      setTestingEmail(true);
+                      try {
+                        const res = await adminApi.sendTestEmail({
+                          to: testEmail,
+                          subject: '轻社区博客 - 邮件测试',
+                          content: '<h2>邮件测试成功！</h2><p>如果你看到这封邮件，说明邮件配置正确。</p><p>发送时间: ' + new Date().toLocaleString('zh-CN') + '</p>',
+                        });
+                        if (res.success) {
+                          const method = res.data?.method || 'unknown';
+                          const note = res.data?.note ? ` (${res.data.note})` : '';
+                          toast.success(`测试邮件发送成功 [${method}]${note}`);
+                        } else {
+                          toast.error(res.message || '发送失败');
+                        }
+                      } catch {
+                        toast.error('发送失败，请检查 SMTP 配置');
+                      } finally {
+                        setTestingEmail(false);
+                      }
+                    }}
+                    disabled={testingEmail}
+                  >
+                    {testingEmail ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
+                    发送测试邮件
+                  </Button>
+                </div>
+                {smtpStatus && (
+                  <Alert className={smtpStatus.valid ? 'border-green-500/30 bg-green-500/5' : 'border-destructive/30 bg-destructive/5'}>
+                    {smtpStatus.valid ? (
+                      <CheckCircle className="h-4 w-4 text-green-500" />
+                    ) : (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    )}
+                    <AlertDescription className="text-xs">
+                      {smtpStatus.message}
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

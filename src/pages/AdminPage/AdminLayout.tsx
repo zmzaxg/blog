@@ -118,7 +118,7 @@ export default function AdminLayout() {
       </aside>
 
       {/* 主内容区 */}
-      <div className="flex min-h-screen flex-1 flex-col">
+      <div className="flex min-h-screen flex-1 flex-col min-w-0">
         {/* 顶部栏 */}
         <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-md md:px-6">
           <div className="flex items-center gap-3">
@@ -141,8 +141,10 @@ export default function AdminLayout() {
         </header>
 
         {/* 内容区 */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
-          <Outlet />
+        <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="mx-auto w-full max-w-5xl p-4 md:p-6">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>
