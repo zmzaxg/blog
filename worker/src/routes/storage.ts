@@ -166,13 +166,22 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     // 判断策略（优先级从高到低）:
     // 1. resourcetype 中包含 collection → 一定是目录
     // 2. href 结尾是 / → 一定是目录
-    // 3. 有 getcontentlength → 一定是文件
-    // 4. 有已知文件扩展名 → 是文件
-    // 5. 其他情况默认为文件
-    const hasCollection = /<[^>]*resourcetype[^>]*>[\s\S]*?collection[\s\S]*?<\/[^>]*resourcetype>/i.test(block);
+    // 3. MIME 类型是 httpd/unix-directory → 是目录
+    // 4. 有 getcontentlength → 一定是文件
+    // 5. 有已知文件扩展名 → 是文件
+    // 6. 其他情况默认为文件
+
+    // 提取 resourcetype 内容
+    const resourcetypeBlock = block.match(/<(?:d:|D:)?resourcetype[^>]*>([\s\S]*?)<\/(?:d:|D:)?resourcetype>/i);
+    const resourcetypeContent = resourcetypeBlock ? resourcetypeBlock[1] : '';
+    const hasCollection = /collection/i.test(resourcetypeContent);
     const endsWithSlash = href.endsWith('/');
     const hasContentLength = /<(?:d:|D:)?getcontentlength>\d+<\/(?:d:|D:)?getcontentlength>/i.test(block);
-    const hasMimeType = /<(?:d:|D:)?getcontenttype>[^<]+<\/(?:d:|D:)?getcontenttype>/i.test(block);
+
+    // 提取 MIME 类型
+    const mimeMatchBlock = block.match(/<(?:d:|D:)?getcontenttype>([^<]+)<\/(?:d:|D:)?getcontenttype>/i);
+    const mimeType = mimeMatchBlock ? mimeMatchBlock[1].trim() : '';
+    const isMimeDirectory = mimeType === 'httpd/unix-directory';
 
     // 检查是否有已知文件扩展名
     const lastSegment = href.split('/').filter(Boolean).pop() || '';
@@ -183,22 +192,18 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
 
     let isDir: boolean;
     if (hasCollection) {
-      // 明确标记为 collection 的是目录
       isDir = true;
     } else if (endsWithSlash) {
-      // URL 以 / 结尾的是目录
       isDir = true;
-    } else if (hasContentLength || hasMimeType) {
-      // 有 content length 或 MIME type 的是文件
+    } else if (isMimeDirectory) {
+      isDir = true;
+    } else if (hasContentLength) {
       isDir = false;
     } else if (isKnownFileExt) {
-      // 有已知文件扩展名的是文件
       isDir = false;
     } else if (hasFileExtension) {
-      // 有任何文件扩展名的也视为文件
       isDir = false;
     } else {
-      // 没有任何标识的，默认为文件（避免误判目录）
       isDir = false;
     }
 
@@ -210,21 +215,41 @@ function parseWebDAVXml(xml: string, baseUrl: string): Array<{
     const modifiedMatch = block.match(/<(?:d:|D:)?getlastmodified>([^<]+)<\/(?:d:|D:)?getlastmodified>/i);
     const lastModified = modifiedMatch ? modifiedMatch[1] : '';
 
-    // 提取 MIME 类型
-    const mimeMatch = block.match(/<(?:d:|D:)?getcontenttype>([^<]+)<\/(?:d:|D:)?getcontenttype>/i);
-    const contentType = mimeMatch ? mimeMatch[1] : '';
-
-    // 如果 MIME 类型是 httpd/unix-directory，则是目录
-    if (contentType === 'httpd/unix-directory') {
-      isDir = true;
-    }
-
     // 计算相对路径和文件名
+    // baseUrl 是 PROPFIND 请求的完整 URL
+    // href 可能是绝对 URL 或相对路径
     const normalizedBase = baseUrl.replace(/\/$/, '');
     let relativePath = href;
-    if (href.startsWith(normalizedBase)) {
-      relativePath = href.slice(normalizedBase.length);
+
+    if (href.startsWith('http://') || href.startsWith('https://')) {
+      // 绝对 URL：去掉 baseUrl 前缀
+      if (href.startsWith(normalizedBase)) {
+        relativePath = href.slice(normalizedBase.length);
+      } else {
+        try {
+          const hrefUrl = new URL(href);
+          const baseUrlObj = new URL(normalizedBase);
+          const basePath = baseUrlObj.pathname.replace(/\/$/, '');
+          if (hrefUrl.pathname.startsWith(basePath)) {
+            relativePath = hrefUrl.pathname.slice(basePath.length);
+          }
+        } catch {
+          // 解析失败，保持原值
+        }
+      }
+    } else {
+      // 相对路径
+      try {
+        const baseUrlObj = new URL(normalizedBase);
+        const basePath = baseUrlObj.pathname.replace(/\/$/, '');
+        if (href.startsWith(basePath)) {
+          relativePath = href.slice(basePath.length);
+        }
+      } catch {
+        // 解析失败，直接用 href
+      }
     }
+
     relativePath = relativePath.replace(/^\//, '').replace(/\/$/, '');
 
     // 跳过空路径（目录自身）

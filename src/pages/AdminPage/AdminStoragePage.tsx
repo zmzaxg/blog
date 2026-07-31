@@ -295,6 +295,7 @@ export default function AdminStoragePage() {
 
   // 预览文件
   const handlePreview = async (configId: number, filePath: string) => {
+    setPreviewContent({ path: filePath, content: '', content_type: 'text/plain', size: 0 });
     setPreviewLoading(true);
     try {
       const res = await storageApi.readFile(configId, filePath);
@@ -302,9 +303,11 @@ export default function AdminStoragePage() {
         setPreviewContent(res.data as unknown as { path: string; content: string; content_type: string; size: number });
       } else {
         toast.error(res.message || '读取文件失败');
+        setPreviewContent(null);
       }
     } catch {
       toast.error('读取文件失败');
+      setPreviewContent(null);
     } finally {
       setPreviewLoading(false);
     }
@@ -678,8 +681,8 @@ export default function AdminStoragePage() {
               {configs.map((config) => (
                 <Card key={config.id}>
                   <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
                           <HardDrive className="h-5 w-5 text-primary" />
                         </div>
@@ -690,7 +693,7 @@ export default function AdminStoragePage() {
                               <Badge className="h-5 bg-primary/20 text-[10px] text-primary">默认</Badge>
                             )}
                           </CardTitle>
-                          <CardDescription className="mt-0.5 text-xs">
+                          <CardDescription className="mt-0.5 text-xs truncate max-w-[280px] sm:max-w-none">
                             {config.type.toUpperCase()} · {config.config?.url || '未配置'}
                             {config.config?.path && ` / ${config.config.path}`}
                           </CardDescription>
@@ -705,7 +708,7 @@ export default function AdminStoragePage() {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-1">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -802,14 +805,14 @@ export default function AdminStoragePage() {
 
           {/* 文件浏览器 */}
           {browsingConfigId && (
-            <Card>
+            <Card className="overflow-hidden">
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
                     <Folder className="h-4 w-4" />
                     文件浏览器
                   </CardTitle>
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
                     <Button
                       variant="outline"
                       size="sm"
@@ -994,7 +997,7 @@ export default function AdminStoragePage() {
                 ) : previewContent.content_type.startsWith('image/') ? (
                   <div className="flex justify-center">
                     <img
-                      src={`data:${previewContent.content_type};base64,${btoa(previewContent.content)}`}
+                      src={`data:${previewContent.content_type};base64,${(() => { try { return btoa(previewContent.content); } catch { return btoa(unescape(encodeURIComponent(previewContent.content))); } })()}`}
                       alt=""
                       className="max-w-full max-h-[400px] rounded border"
                     />
